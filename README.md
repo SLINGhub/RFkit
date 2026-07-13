@@ -1,5 +1,5 @@
 # RFkit
-For compiled executables, please go to [Releases](https://github.com/SLINGhub/RFkit/releases/tag/RF) page. 
+For compiled executables, please go to [Releases](https://github.com/SLINGhub/RFkit/releases/latest) page. 
 
 RFkit is a freely distributed software package for processing targeted metabolomics data from RapidFire-MS experiments.
 

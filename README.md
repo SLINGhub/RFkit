@@ -10,7 +10,7 @@ The tool takes the following as input: (i) mzML files containing the data for in
 
 ## Building from source
 
-Once the repo in downloaded:
+Once the repository is downloaded:
 
 ```bash
 cd RFkit

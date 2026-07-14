@@ -7,7 +7,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args();
     args.next();
     std::env::set_current_dir(std::env::current_exe()?.parent().unwrap())?;
-    let param_t = crate::common::read_param()?;
+    let param_t = common::read_param()?;
     match args.next().as_deref() {
         Some("1") => acq_time::read(&param_t),
         Some("2") => {

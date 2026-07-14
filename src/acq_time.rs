@@ -16,7 +16,7 @@ fn write_rt(rt_l: &[(u8, Vec<AcqTime>)], offset: f32) -> Result<(), Box<dyn Erro
     }
     Ok(())
 }
-pub fn read_log() -> Result<Vec<(u8, Vec<AcqTime>)>, Box<dyn Error>> {
+fn read_log() -> Result<Vec<(u8, Vec<AcqTime>)>, Box<dyn Error>> {
     let mut reader = BufReader::new(std::fs::File::open("batch.rftime")?);
     let mut line = String::new();
     reader.read_line(&mut line)?;

@@ -1,3 +1,9 @@
 /target
 /Cargo.lock
 .DS_Store
+gui/src-tauri/target/
+gui/src-tauri/gen/
+gui/src-tauri/icons/
+gui/dist/windows/RFkit-gui-64BIT-WINDOWS-BUILD.zip
+gui/dist/windows/RFkit-worker.exe
+gui/dist/windows/RFkit GUI.exe

@@ -6,7 +6,11 @@ use std::error::Error;
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args();
     args.next();
-    std::env::set_current_dir(std::env::current_exe()?.parent().unwrap())?;
+    if let Ok(project_dir) = std::env::var("RFKIT_PROJECT_DIR") {
+        std::env::set_current_dir(project_dir)?;
+    } else {
+        std::env::set_current_dir(std::env::current_exe()?.parent().unwrap())?;
+    }
     let param_t = common::read_param()?;
     match args.next().as_deref() {
         Some("1") => acq_time::read(&param_t),
@@ -53,9 +57,25 @@ Enter number.
 }
 fn gen_plots() -> Result<(), Box<dyn Error>> {
     use std::process::{Command, Stdio};
-    Command::new("Rscript")
-        .arg("RFkit_plot.r")
+    let rscript = std::env::var_os("RFKIT_RSCRIPT").unwrap_or_else(|| "Rscript".into());
+    let script = std::env::var_os("RFKIT_PLOT_SCRIPT").unwrap_or_else(|| "RFkit_plot.r".into());
+    let status = Command::new(&rscript)
+        .arg(script)
         .stdout(Stdio::inherit())
-        .output()?;
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                std::io::Error::new(
+                    error.kind(),
+                    "Rscript was not found. Install R and make Rscript available on PATH, or set RFKIT_RSCRIPT to the full Rscript executable path.",
+                )
+            } else {
+                error
+            }
+        })?;
+    if !status.success() {
+        return Err(format!("Rscript exited with code {}", status.code().unwrap_or(-1)).into());
+    }
     Ok(())
 }

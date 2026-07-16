@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="graphical interface for RFkit RapidFire-MS processing"
+    />
+    <title>RFkit GUI</title>
+    <script>
+      try {
+        document.documentElement.dataset.theme =
+          localStorage.getItem("rfkit-theme") || "light";
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <a class="brand" href="#" aria-label="RFkit home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M4 17h16" />
+              <path d="M5 14.5c2.2 0 2.3-7 4.5-7s2.3 10 4.5 10 2.3-6 5-6" />
+              <circle cx="9.5" cy="7.5" r="1.3" />
+              <circle cx="14" cy="17.5" r="1.3" />
+            </svg>
+          </span>
+          <span>
+            <strong>RFkit</strong>
+            <small>RapidFire-MS GUI</small>
+          </span>
+        </a>
+
+        <nav class="primary-nav" aria-label="application sections">
+          <button class="nav-item active" id="run-tab" type="button" aria-current="page">
+            Run
+          </button>
+          <button class="nav-item" id="visualizer-tab" type="button">
+            Visualizer
+          </button>
+        </nav>
+
+        <div class="header-actions">
+          <a
+            class="sling-link external-sling-link"
+            href="https://sling.sg/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="visit the singapore lipidomics incubator website"
+          >
+            <img
+              src="assets/sling-banner.png"
+              alt="SLING - Singapore Lipidomics Incubator"
+            />
+          </a>
+          <button
+            class="icon-button theme-toggle"
+            id="theme-toggle"
+            type="button"
+            aria-label="enable night mode"
+            title="enable night mode"
+          >
+            <svg class="theme-icon moon-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 15.2A8.5 8.5 0 0 1 8.8 4a8.5 8.5 0 1 0 11.2 11.2Z" />
+            </svg>
+            <svg class="theme-icon sun-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3.5" />
+              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main id="run-view" class="run-view">
+        <section class="project-panel" aria-labelledby="project-title">
+          <div class="project-copy">
+            <span class="eyebrow">dataset</span>
+            <h1 id="project-title">Choose an RFkit project folder</h1>
+            <p id="project-path">Select the folder containing param.txt, batch.rftime, and mzml_dir.</p>
+          </div>
+          <button class="secondary-button" id="choose-project" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 6.5h6l2 2h10v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+              <path d="M12 12v5m-2.5-2.5h5" />
+            </svg>
+            <span>Select folder</span>
+          </button>
+        </section>
+
+        <section class="summary-grid" aria-label="project summary">
+          <article class="fact">
+            <span>mzML files</span>
+            <strong id="mzml-count">-</strong>
+          </article>
+          <article class="fact">
+            <span>transitions</span>
+            <strong id="transition-count">-</strong>
+          </article>
+          <article class="fact">
+            <span>transition list</span>
+            <strong id="transition-file">-</strong>
+          </article>
+          <article class="fact">
+            <span>engine</span>
+            <strong id="worker-name">-</strong>
+          </article>
+        </section>
+
+        <section class="notice hidden" id="project-notice" role="status" aria-live="polite">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3 2.5 20h19Z" />
+            <path d="M12 9v5m0 3h.01" />
+          </svg>
+          <div>
+            <strong>Project needs attention</strong>
+            <ul id="project-issues"></ul>
+          </div>
+        </section>
+
+        <section class="run-panel" aria-labelledby="run-title">
+          <div>
+            <span class="eyebrow">one step</span>
+            <h2 id="run-title">Process dataset</h2>
+            <p id="run-subtitle">Generates acq_time.csv, long.csv, misc plot data, and chromatogram PDFs.</p>
+          </div>
+          <button class="run-button" id="run-all" type="button" disabled>
+            <span class="run-ready">Run RFkit</span>
+            <span class="run-busy">Running...</span>
+          </button>
+        </section>
+
+        <section class="outputs-grid" aria-label="outputs">
+          <article class="output" id="output-acq">
+            <span>acq_time.csv</span>
+            <strong>waiting</strong>
+          </article>
+          <article class="output" id="output-long">
+            <span>long.csv</span>
+            <strong>waiting</strong>
+          </article>
+          <article class="output" id="output-misc">
+            <span>misc plot data</span>
+            <strong>waiting</strong>
+          </article>
+          <article class="output" id="output-pdf">
+            <span>PDF plots</span>
+            <strong>waiting</strong>
+          </article>
+        </section>
+
+        <section class="activity-panel" aria-labelledby="activity-title">
+          <div class="activity-header">
+            <div>
+              <span class="activity-pulse" aria-hidden="true"></span>
+              <h2 id="activity-title">Activity</h2>
+            </div>
+            <button id="clear-activity" type="button">Clear</button>
+          </div>
+          <div class="activity-log" id="activity-log" role="log" aria-live="polite">
+            <p class="empty-log">Select a project to begin.</p>
+          </div>
+        </section>
+      </main>
+
+      <main id="visualizer-view" class="visualizer-view hidden">
+        <section class="visualizer-toolbar" aria-labelledby="visualizer-title">
+          <div class="visualizer-heading-row">
+            <div class="visualizer-heading">
+              <span class="eyebrow">selected dataset</span>
+              <h1 id="visualizer-title">RFkit visualizer</h1>
+              <p id="visualizer-dataset">Select a project in the Run tab first.</p>
+            </div>
+            <button
+              class="icon-button visualizer-selector-expand"
+              id="visualizer-selector-expand"
+              type="button"
+              aria-expanded="true"
+              aria-label="collapse graph selector"
+              title="collapse graph selector"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 15 6-6 6 6" />
+              </svg>
+            </button>
+          </div>
+          <div class="visualizer-controls">
+            <label class="visualizer-field transition-field">
+              <span>Transition</span>
+              <input
+                id="visualizer-search"
+                type="text"
+                placeholder="Search transitions..."
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <select id="visualizer-transition" size="5">
+                <option value="">Select a transition</option>
+              </select>
+            </label>
+            <div class="visualizer-sizing">
+              <label class="visualizer-field">
+                <span>Width</span>
+                <input id="visualizer-width" type="number" min="260" max="1200" step="20" value="420" />
+              </label>
+              <label class="visualizer-field">
+                <span>Height</span>
+                <input id="visualizer-height" type="number" min="130" max="700" step="10" value="190" />
+              </label>
+              <label class="visualizer-field">
+                <span>RT start</span>
+                <input id="visualizer-rt-start" type="number" min="0" max="999" step="0.05" value="0" />
+              </label>
+              <label class="visualizer-field">
+                <span>RT end</span>
+                <input id="visualizer-rt-end" type="number" min="0" max="999" step="0.05" value="0" />
+              </label>
+              <label class="visualizer-field">
+                <span>Max intensity</span>
+                <input id="visualizer-intensity" type="number" min="0" step="1" value="0" />
+              </label>
+              <button
+                class="icon-button"
+                id="visualizer-save"
+                type="button"
+                disabled
+                aria-label="save dragged integration bounds"
+                title="save dragged integration bounds"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" />
+                  <path d="M8 4v5h6V4M8 20v-6h8v6" />
+                </svg>
+              </button>
+              <button
+                class="icon-button"
+                id="visualizer-overwrite-backup"
+                type="button"
+                disabled
+                aria-label="overwrite selected backup"
+                title="overwrite selected backup"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" />
+                  <path d="M8 4v5h6V4M8 20v-6h8v6" />
+                  <path d="M16 11h4v4M20 11l-5 5" />
+                </svg>
+              </button>
+              <button
+                class="icon-button reference-apply-button"
+                id="visualizer-apply-references"
+                type="button"
+                disabled
+                aria-label="apply selected reference integrations to this transition"
+                title="apply selected reference integrations to this transition"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 12h14M12 5l7 7-7 7" />
+                  <path d="M4 5h4v4H4zM4 15h4v4H4z" />
+                </svg>
+              </button>
+              <button
+                class="icon-button reference-apply-button"
+                id="visualizer-auto-shift"
+                type="button"
+                disabled
+                aria-label="auto-shift plots from selected references"
+                title="auto-shift plots from selected references"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 17h16M5 12c3.2 0 3.2-6 6.4-6s3.2 6 6.6 6" />
+                  <path d="M8 20l-3-3 3-3M16 20l3-3-3-3" />
+                </svg>
+              </button>
+              <button
+                class="icon-button"
+                id="visualizer-refresh"
+                type="button"
+                aria-label="reload selected transition"
+                title="reload selected transition"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6" />
+                </svg>
+              </button>
+              <button
+                class="icon-button visualizer-cancel hidden"
+                id="visualizer-cancel"
+                type="button"
+                aria-label="cancel rendering"
+                title="cancel rendering"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+              <button
+                class="icon-button"
+                id="visualizer-delete-backup"
+                type="button"
+                disabled
+                aria-label="delete selected backup"
+                title="delete selected backup"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3" />
+                </svg>
+              </button>
+              <button
+                class="icon-button"
+                id="visualizer-rename-backup"
+                type="button"
+                disabled
+                aria-label="rename selected backup"
+                title="rename selected backup"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 20h5l10-10a2.8 2.8 0 0 0-4-4L5 16zM13 7l4 4" />
+                </svg>
+              </button>
+              <button
+                class="icon-button"
+                id="visualizer-import-backup"
+                type="button"
+                disabled
+                aria-label="import backup"
+                title="backups are not available for RFkit plot files yet"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v11m-4-4 4 4 4-4M5 17v3h14v-3" />
+                </svg>
+              </button>
+            </div>
+            <label class="visualizer-field backups-field">
+              <span>Plot version</span>
+              <select id="visualizer-backups" disabled>
+                <option value="">No saved versions yet</option>
+              </select>
+            </label>
+          </div>
+          <div class="visualizer-selection">
+            <strong id="visualizer-analyte">Choose a transition to render RFkit chromatograms.</strong>
+            <span id="visualizer-status" role="status" aria-live="polite">Ready</span>
+            <label class="visualizer-shortcut-toggle">
+              <input id="visualizer-shortcuts-global" type="checkbox" checked />
+              <span>Arrow shortcuts when minimized</span>
+            </label>
+            <label class="visualizer-shortcut-toggle">
+              <input id="visualizer-auto-shift-after-uniform" type="checkbox" checked />
+              <span>Auto-shift after uniform</span>
+            </label>
+          </div>
+        </section>
+        <section
+          class="visualizer-plot-grid"
+          id="visualizer-plots"
+          aria-label="RFkit chromatogram plots"
+        ></section>
+      </main>
+
+      <footer>
+        <span>RFkit GUI</span>
+        <a
+          id="footer-status"
+          class="external-sling-link"
+          href="https://sling.sg/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >https://sling.sg/</a>
+      </footer>
+    </div>
+
+    <div class="modal-backdrop hidden" id="project-modal" role="presentation">
+      <section class="project-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <span class="modal-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M3 6.5h6l2 2h10v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+            <path d="M3 9h18" />
+          </svg>
+        </span>
+        <span class="eyebrow">project setup</span>
+        <h2 id="modal-title">Where is your dataset?</h2>
+        <p id="modal-message">Choose the folder containing the RFkit input files. The GUI will remember it next time.</p>
+        <button class="primary-button" id="modal-choose-project" type="button">
+          Choose project folder
+        </button>
+        <small>Your files are processed locally.</small>
+      </section>
+    </div>
+
+    <div class="modal-backdrop hidden" id="prompt-modal" role="presentation">
+      <section class="project-modal prompt-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-title">
+        <span class="eyebrow">backup label</span>
+        <h2 id="prompt-title">Rename backup</h2>
+        <p id="prompt-message"></p>
+        <input id="prompt-input" class="prompt-input" type="text" autocomplete="off" />
+        <div class="prompt-actions">
+          <button id="prompt-cancel" class="secondary-button" type="button">Cancel</button>
+          <button id="prompt-ok" class="primary-button" type="button">Save</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="assertive"></div>
+  </body>
+</html>

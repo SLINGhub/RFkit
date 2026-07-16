@@ -132,6 +132,7 @@ const mockVisualizerData = {
       points,
       wells: Array.from({ length: 4 }, (_, wellIndex) => ({
         label: `(${String.fromCharCode(65 + sampleIndex)}, ${wellIndex + 1})`,
+        sampleId: wellIndex % 2 === 0 ? "Conditioning" : `SN03${sampleIndex}${wellIndex}`,
         startIndex: 60 + wellIndex * 2,
         endIndex: 105 + wellIndex * 2,
         rtStart: points[60 + wellIndex * 2].rt,
@@ -1655,7 +1656,9 @@ function wellTitle(well) {
 
 // combines plate and well into the plot title
 function chartTitle(sample, well) {
-  return `${sampleTitle(sample)} ${wellTitle(well)}`;
+  const sampleId = typeof well.sampleId === "string" ? well.sampleId.trim() : "";
+  const title = `${sampleTitle(sample)} ${wellTitle(well)}`;
+  return sampleId ? `${title} : ${sampleId}` : title;
 }
 
 // shows each reference's local start offset
@@ -2136,6 +2139,7 @@ function drawChart(chart, hoverIndex = null, tooltipText = null) {
   ctx.fillText(axisLabels.start, margins.left, height - 5);
   ctx.textAlign = "right";
   ctx.fillText(axisLabels.end, width - margins.right, height - 5);
+  ctx.fillText("0", margins.left - 4, plotBottom - 2);
   ctx.fillText(`${Math.round(domain.yMax).toLocaleString()}`, margins.left - 4, margins.top + 4);
   ctx.fillStyle = green;
   ctx.fillText(`area ${Math.round(integration.area).toLocaleString()}`, width - 10, 12);

@@ -60,6 +60,7 @@ struct VisualizerPoint {
 #[serde(rename_all = "camelCase")]
 struct VisualizerWindow {
     label: String,
+    sample_id: Option<String>,
     start_index: usize,
     end_index: usize,
     rt_start: f32,
@@ -520,21 +521,28 @@ fn sip_order_by_well(project: &Path) -> HashMap<(u8, u8, u8), u32> {
     order
 }
 
+// extracts the plate number from labels like plate 1 or plate 1 emd
+fn plate_number(value: &str) -> Option<u16> {
+    let digits = value
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect::<String>();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse::<u16>().ok()
+    }
+}
+
 // makes sequence labels match the plate wording in batch.rftime
 fn sample_display_name(sample_id: &str, plates: &HashMap<u8, String>) -> String {
     sample_sequence(sample_id)
         .ok()
         .and_then(|sequence| {
             plates.get(&sequence).map(|plate| {
-                let plate_number = plate
-                    .chars()
-                    .filter(char::is_ascii_digit)
-                    .collect::<String>();
-                if plate_number.is_empty() {
-                    plate.to_string()
-                } else {
-                    format!("plate {plate_number}")
-                }
+                plate_number(plate)
+                    .map(|number| format!("plate {number}"))
+                    .unwrap_or_else(|| plate.to_string())
             })
         })
         .unwrap_or_else(|| sample_id.to_string())
@@ -555,6 +563,151 @@ fn parse_well_label(label: &str) -> Result<(u8, u8), String> {
             .parse::<u8>()
             .map_err(|error| error.to_string())?,
     ))
+}
+
+// parses sample-list wells like A10 into row and column numbers
+fn parse_named_well(value: &str) -> Option<(u8, u8)> {
+    let value = value.trim();
+    let mut letters = String::new();
+    let mut digits = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphabetic() {
+            letters.push(character.to_ascii_uppercase());
+        } else if character.is_ascii_digit() {
+            digits.push(character);
+        }
+    }
+    if letters.is_empty() || digits.is_empty() {
+        return None;
+    }
+    let mut row = 0_u16;
+    for character in letters.bytes() {
+        row = row
+            .checked_mul(26)?
+            .checked_add(u16::from(character - b'A' + 1))?;
+    }
+    Some((u8::try_from(row).ok()?, digits.parse::<u8>().ok()?))
+}
+
+// normalizes headers for small csv lookups
+fn normalized_header(value: &str) -> String {
+    value
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+// parses the simple csv files used by rfkit outputs
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut chars = line.chars().peekable();
+    let mut quoted = false;
+    while let Some(character) = chars.next() {
+        match character {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                cell.push('"');
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                cells.push(std::mem::take(&mut cell));
+            }
+            _ => cell.push(character),
+        }
+    }
+    cells.push(cell);
+    cells
+}
+
+// escapes one cell for rfkit_results.csv
+fn csv_cell(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+// finds the sample list shipped with gui datasets
+fn find_sample_list(project: &Path) -> Option<PathBuf> {
+    let exact = project.join("GUI test sample list.csv");
+    if exact.is_file() {
+        return Some(exact);
+    }
+    fs::read_dir(project)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.to_ascii_lowercase())
+                    .is_some_and(|name| {
+                        name.ends_with(".csv") && name.contains("sample") && name.contains("list")
+                    })
+        })
+}
+
+// maps plate wells to sample ids from the gui sample list
+fn sample_ids_by_plate_well(project: &Path) -> HashMap<(u16, u8, u8), String> {
+    let Some(path) = find_sample_list(project) else {
+        return HashMap::new();
+    };
+    let Ok(contents) = fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let mut lines = contents.lines();
+    let Some(header_line) = lines.next() else {
+        return HashMap::new();
+    };
+    let headers = parse_csv_line(header_line)
+        .into_iter()
+        .map(|cell| normalized_header(&cell))
+        .collect::<Vec<_>>();
+    let index = |name: &str| headers.iter().position(|header| header == name);
+    let (Some(plate_index), Some(well_index), Some(sample_index)) =
+        (index("plate"), index("well"), index("sampleid"))
+    else {
+        return HashMap::new();
+    };
+
+    let mut samples = HashMap::new();
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cells = parse_csv_line(line);
+        if cells.len() <= plate_index || cells.len() <= well_index || cells.len() <= sample_index {
+            continue;
+        }
+        let Some(plate) = plate_number(&cells[plate_index]) else {
+            continue;
+        };
+        let Some((row, column)) = parse_named_well(&cells[well_index]) else {
+            continue;
+        };
+        let sample_id = cells[sample_index].trim();
+        if !sample_id.is_empty() {
+            samples.insert((plate, row, column), sample_id.to_string());
+        }
+    }
+    samples
+}
+
+// finds the human sample id for one plotted well
+fn sample_id_for_well(
+    sequence: u8,
+    well_label: &str,
+    plates: &HashMap<u8, String>,
+    sample_ids: &HashMap<(u16, u8, u8), String>,
+) -> Option<String> {
+    let plate = plate_number(plates.get(&sequence)?)?;
+    let (row, column) = parse_well_label(well_label).ok()?;
+    sample_ids.get(&(plate, row, column)).cloned()
 }
 
 // writes updated integration times back into the parsed row
@@ -648,6 +801,75 @@ fn save_bounds_to_batch(project: &Path, edits: &[BoundEdit]) -> Result<usize, St
     output.push('\n');
     fs::write(path, output).map_err(|error| error.to_string())?;
     Ok(written)
+}
+
+// writes long.csv with sample ids inserted as column d
+fn write_labeled_results(project: &Path) -> Result<(), String> {
+    let source = project.join("long.csv");
+    if !source.is_file() {
+        return Ok(());
+    }
+    let contents = fs::read_to_string(&source).map_err(|error| error.to_string())?;
+    let mut rows = contents.lines();
+    let Some(header_line) = rows.next() else {
+        fs::write(project.join("RFkit_results.csv"), "").map_err(|error| error.to_string())?;
+        return Ok(());
+    };
+
+    let plates = plate_by_sequence(project);
+    let sample_ids = sample_ids_by_plate_well(project);
+    let mut header = parse_csv_line(header_line);
+    let headers = header
+        .iter()
+        .map(|cell| normalized_header(cell))
+        .collect::<Vec<_>>();
+    let sample_index = headers
+        .iter()
+        .position(|header| header == "sample")
+        .unwrap_or(0);
+    let well_index = headers
+        .iter()
+        .position(|header| header == "well")
+        .unwrap_or(2);
+    let insert_index = 3.min(header.len());
+    header.insert(insert_index, "Sample_ID".to_string());
+
+    let mut output_rows = Vec::new();
+    output_rows.push(header);
+    for line in rows {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut cells = parse_csv_line(line);
+        let label = if cells.len() > sample_index && cells.len() > well_index {
+            sample_sequence(&cells[sample_index])
+                .ok()
+                .and_then(|sequence| {
+                    sample_id_for_well(sequence, &cells[well_index], &plates, &sample_ids)
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        while cells.len() < insert_index {
+            cells.push(String::new());
+        }
+        cells.insert(insert_index, label);
+        output_rows.push(cells);
+    }
+
+    let mut output = output_rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| csv_cell(cell))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    output.push('\n');
+    fs::write(project.join("RFkit_results.csv"), output).map_err(|error| error.to_string())
 }
 
 // counts mzml inputs recursively
@@ -788,12 +1010,14 @@ fn transition_names(path: &Path) -> Result<Vec<String>, String> {
 fn parse_window(
     points: &[VisualizerPoint],
     label: String,
+    sample_id: Option<String>,
     raw_start: u16,
     raw_end: u16,
 ) -> VisualizerWindow {
     if points.is_empty() {
         return VisualizerWindow {
             label,
+            sample_id,
             start_index: 0,
             end_index: 0,
             rt_start: 0.0,
@@ -825,6 +1049,7 @@ fn parse_window(
     }
     VisualizerWindow {
         label,
+        sample_id,
         start_index: start,
         end_index: end,
         rt_start,
@@ -840,6 +1065,7 @@ fn parse_selected_transition(
     transition: &str,
     plates: &HashMap<u8, String>,
     sip_order: &HashMap<(u8, u8, u8), u32>,
+    sample_ids: &HashMap<(u16, u8, u8), String>,
 ) -> Result<Option<VisualizerSample>, String> {
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     let mut reader = BinReader::new(&bytes);
@@ -859,13 +1085,17 @@ fn parse_selected_transition(
                 intensity: reader.f32()?,
             });
         }
+        let sample_id = sample_id_from_plot(path);
+        let sequence = sample_sequence(&sample_id).ok();
         let well_count = reader.u8()?;
         let mut wells = Vec::with_capacity(usize::from(well_count));
         for well_index in 0..usize::from(well_count) {
             let label = reader.string()?;
             let start = reader.u16()?;
             let end = reader.u16()?;
-            let well = parse_window(&points, label, start, end);
+            let well_sample_id = sequence
+                .and_then(|sequence| sample_id_for_well(sequence, &label, plates, sample_ids));
+            let well = parse_window(&points, label, well_sample_id, start, end);
             if well.end_index > well.start_index
                 && well.rt_end > well.rt_start
                 && well.height.is_finite()
@@ -876,7 +1106,6 @@ fn parse_selected_transition(
                 wells.push((well_index, well));
             }
         }
-        let sample_id = sample_id_from_plot(path);
         if let Ok(sequence) = sample_sequence(&sample_id) {
             wells.sort_by_key(|(well_index, well)| {
                 let sip = parse_well_label(&well.label)
@@ -1047,9 +1276,10 @@ fn visualizer_transition(
     let mut transition_seen = false;
     let plates = plate_by_sequence(&project);
     let sip_order = sip_order_by_well(&project);
+    let sample_ids = sample_ids_by_plate_well(&project);
 
     for path in plot_files(&project)? {
-        match parse_selected_transition(&path, &transition, &plates, &sip_order)? {
+        match parse_selected_transition(&path, &transition, &plates, &sip_order, &sample_ids)? {
             Some(sample) => {
                 transition_seen = true;
                 if !sample.wells.is_empty() {
@@ -1507,6 +1737,7 @@ fn run_worker(app: AppHandle, project: PathBuf) -> Result<ProjectSummary, String
         "2only",
         "area calculation and gui plot data",
     )?;
+    write_labeled_results(&project)?;
     Ok(inspect_project(&project))
 }
 
@@ -1629,6 +1860,39 @@ mod tests {
         let sip_order = sip_order_by_well(&project);
         assert_eq!(sip_order.get(&(1, 2, 1)).copied(), Some(1));
         assert_eq!(sip_order.len(), 1);
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn labeled_results_insert_sample_id_column() {
+        let project = std::env::temp_dir().join(format!(
+            "rfkit_labeled_results_{}_{}",
+            std::process::id(),
+            "test"
+        ));
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join("batch.rftime"),
+            "plate     sip    seq    row     col     siptime     sipsensor\n------------------------------------------------------------------------\nPlate 1\t1\t1\t1\t1\t3.073\t0\nPlate 1\t2\t1\t3001\t3\t16.199\t1\n",
+        )
+        .unwrap();
+        fs::write(
+            project.join("GUI test sample list.csv"),
+            "Plate,Well,Sample_ID\nPlate 1,A1,SN0323\n",
+        )
+        .unwrap();
+        fs::write(
+            project.join("long.csv"),
+            "sample,ID,well,RT at apex,area,height\nsequence1.mzML,Cer,\"(1, 1)\",0.223,13935.9,3070.1\n",
+        )
+        .unwrap();
+
+        write_labeled_results(&project).unwrap();
+        let result = fs::read_to_string(project.join("RFkit_results.csv")).unwrap();
+        assert_eq!(
+            result,
+            "sample,ID,well,Sample_ID,RT at apex,area,height\nsequence1.mzML,Cer,\"(1, 1)\",SN0323,0.223,13935.9,3070.1\n"
+        );
         fs::remove_dir_all(project).unwrap();
     }
 

@@ -62,7 +62,6 @@ const elements = {
     acqTime: document.querySelector("#output-acq"),
     longCsv: document.querySelector("#output-long"),
     miscData: document.querySelector("#output-misc"),
-    pdfPlots: document.querySelector("#output-pdf"),
   },
 };
 
@@ -80,6 +79,7 @@ const visualizer = {
   uniformView: null,
   pendingSave: null,
   transitionMaxRtSpan: null,
+  chartColors: null,
   renderToken: 0,
   rendering: false,
   rangeManuallySet: false,
@@ -108,7 +108,6 @@ const mockProject = {
     acqTime: false,
     longCsv: false,
     miscData: false,
-    pdfPlots: false,
   },
 };
 
@@ -129,6 +128,7 @@ const mockVisualizerData = {
     });
     return {
       sampleId: `sequence${sampleIndex + 1}.mzML`,
+      displayName: `plate ${sampleIndex + 1}`,
       points,
       wells: Array.from({ length: 4 }, (_, wellIndex) => ({
         label: `(${String.fromCharCode(65 + sampleIndex)}, ${wellIndex + 1})`,
@@ -144,6 +144,7 @@ const mockVisualizerData = {
   }),
 };
 
+// adds one line to the run log
 function addActivity(message, kind = "") {
   const empty = elements.activityLog.querySelector(".empty-log");
   if (empty) empty.remove();
@@ -159,6 +160,7 @@ function addActivity(message, kind = "") {
   elements.activityLog.scrollTop = elements.activityLog.scrollHeight;
 }
 
+// shows a short status toast
 function showToast(message, kind = "") {
   const toast = document.createElement("div");
   toast.className = `toast ${kind}`.trim();
@@ -167,6 +169,7 @@ function showToast(message, kind = "") {
   window.setTimeout(() => toast.remove(), 4200);
 }
 
+// uses the in-app prompt for backup names
 function appPrompt(message, defaultValue = "", title = "Rename backup") {
   return new Promise((resolve) => {
     elements.promptTitle.textContent = title;
@@ -195,16 +198,19 @@ function appPrompt(message, defaultValue = "", title = "Rename backup") {
   });
 }
 
+// formats counts for compact stat cards
 function formatCount(value) {
   return Number.isFinite(value) ? value.toLocaleString() : "-";
 }
 
+// toggles one output readiness pill
 function setOutput(element, complete) {
   element.classList.toggle("complete", complete);
   element.classList.toggle("pending", !complete);
   element.querySelector("strong").textContent = complete ? "ready" : "waiting";
 }
 
+// updates the run page from backend project state
 function renderProject(summary) {
   const previousPath = project?.path;
   project = summary;
@@ -240,6 +246,7 @@ function renderProject(summary) {
   elements.projectModal.classList.add("hidden");
 }
 
+// locks run controls while RFkit is active
 function setRunning(value) {
   running = value;
   elements.runButton.classList.toggle("running", value);
@@ -248,6 +255,7 @@ function setRunning(value) {
   updateBackupButtons();
 }
 
+// lets the user pick a dataset folder
 async function chooseProject() {
   if (!isDesktop) {
     renderProject(mockProject);
@@ -273,6 +281,7 @@ async function chooseProject() {
   }
 }
 
+// reloads project outputs after external changes
 async function refreshProject() {
   if (!project) return;
   if (!isDesktop) {
@@ -283,6 +292,7 @@ async function refreshProject() {
   renderProject(summary);
 }
 
+// runs the RFkit worker and refreshes the gui
 async function runAll() {
   if (!project || running) return;
   if (!project.canRun) {
@@ -300,7 +310,6 @@ async function runAll() {
           acqTime: true,
           longCsv: true,
           miscData: true,
-          pdfPlots: true,
         },
       });
       resetVisualizer();
@@ -324,6 +333,7 @@ async function runAll() {
   }
 }
 
+// switches to the run tab
 function showRunView() {
   elements.visualizerView.classList.add("hidden");
   elements.runView.classList.remove("hidden");
@@ -333,6 +343,7 @@ function showRunView() {
   elements.visualizerTab.removeAttribute("aria-current");
 }
 
+// switches to the visualizer tab
 function showVisualizerView() {
   elements.runView.classList.add("hidden");
   elements.visualizerView.classList.remove("hidden");
@@ -343,10 +354,32 @@ function showVisualizerView() {
   initializeVisualizer();
 }
 
+// writes the visualizer footer message
 function visualizerMessage(message) {
   elements.visualizerStatus.textContent = message;
 }
 
+// lets status text paint during long visualizer work
+function nextFrame() {
+  return new Promise((resolve) => window.requestAnimationFrame(resolve));
+}
+
+// shows one numbered visualizer work step
+async function visualizerStep(step, total, message) {
+  visualizerMessage(`Step ${step}/${total}: ${message}`);
+  await nextFrame();
+}
+
+// yields during large chart loops
+async function visualizerLoopStep(index, total, step, stepTotal, message) {
+  if (index % 80 !== 0 && index + 1 !== total) return;
+  visualizerMessage(
+    `Step ${step}/${stepTotal}: ${message} ${Math.min(index + 1, total).toLocaleString()} / ${total.toLocaleString()}`,
+  );
+  await nextFrame();
+}
+
+// clears visualizer state for a new project
 function resetVisualizer() {
   visualizer.projectPath = null;
   visualizer.transitions = [];
@@ -359,6 +392,7 @@ function resetVisualizer() {
   visualizer.uniformView = null;
   visualizer.pendingSave = null;
   visualizer.transitionMaxRtSpan = null;
+  visualizer.chartColors = null;
   visualizer.renderToken += 1;
   visualizer.rendering = false;
   visualizer.rangeManuallySet = false;
@@ -381,6 +415,7 @@ function resetVisualizer() {
   updateBackupButtons();
 }
 
+// builds filesystem-safe backup timestamps
 function fileTimestamp(date = new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
   return (
@@ -389,10 +424,12 @@ function fileTimestamp(date = new Date()) {
   );
 }
 
+// names regular integration backups
 function backupFileName(date = new Date()) {
   return `batch_rftime_${fileTimestamp(date)}.rftime`;
 }
 
+// finds the next reference or autoshift number
 function nextNumberedBackupNumber(prefix) {
   const numbers = [...elements.visualizerBackups.options]
     .map((option) => option.value.match(new RegExp(`^${prefix}(\\d+)_`)))
@@ -402,10 +439,12 @@ function nextNumberedBackupNumber(prefix) {
   return numbers.length ? Math.max(...numbers) + 1 : 1;
 }
 
+// names numbered reference and autoshift backups
 function numberedBackupFileName(prefix, number, date = new Date()) {
   return `${prefix}${number}_${fileTimestamp(date)}.rftime`;
 }
 
+// prepares the filename and visible backup label
 function numberedBackupPlan(prefix, date = new Date()) {
   const number = nextNumberedBackupNumber(prefix);
   return {
@@ -415,6 +454,7 @@ function numberedBackupPlan(prefix, date = new Date()) {
   };
 }
 
+// formats timestamps for the backup menu
 function displayTimestamp(date = new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
   return (
@@ -423,6 +463,7 @@ function displayTimestamp(date = new Date()) {
   );
 }
 
+// derives labels for older unlabeled backups
 function backupLabelFallback(name) {
   if (name === "batch_rftime_original.rftime") {
     return "Original batch.rftime";
@@ -438,10 +479,12 @@ function backupLabelFallback(name) {
   return `${hour}:${minute}:${second}  ${month}/${day}/${year}`;
 }
 
+// prefers renamed backup labels when present
 function backupLabel(name) {
   return visualizer.backupLabels[name] ?? backupLabelFallback(name);
 }
 
+// enables saving only when bounds changed
 function updateSaveButton() {
   const dirty = visualizer.charts.some((chart) => chart.hasEdit);
   elements.visualizerSave.disabled = !dirty || visualizer.rendering || running;
@@ -455,6 +498,7 @@ function updateSaveButton() {
   elements.visualizerToolbar.classList.toggle("has-unsaved", dirty);
 }
 
+// enables reference actions when plots are selected
 function updateReferenceButton() {
   const count = visualizer.charts.filter((chart) => chart.isReference).length;
   elements.visualizerApplyReferences.disabled =
@@ -469,6 +513,7 @@ function updateReferenceButton() {
     : "select reference plots to auto-shift this transition";
 }
 
+// protects original and disables invalid backup actions
 function updateBackupButtons() {
   const name = elements.visualizerBackups.value;
   const hasBackup = Boolean(name);
@@ -493,12 +538,13 @@ function updateBackupButtons() {
   updateReferenceButton();
 }
 
+// reloads backup choices from disk
 async function refreshBoundsBackups(selected = null) {
   if (!project?.path || !isDesktop) {
     visualizer.backupLabels = {};
     elements.visualizerBackups.replaceChildren(new Option("No saved versions yet", ""));
     updateBackupButtons();
-    return;
+    return "";
   }
   try {
     const list = await invoke("visualizer_list_bounds_backups", {
@@ -518,20 +564,23 @@ async function refreshBoundsBackups(selected = null) {
       }
     }
     elements.visualizerBackups.replaceChildren(fragment);
-    const target =
-      selected ??
-      list.last ??
-      (list.backups.includes("batch_rftime_original.rftime")
-        ? "batch_rftime_original.rftime"
-        : "");
-    elements.visualizerBackups.value = list.backups.includes(target) ? target : "";
+    const requested = selected && list.backups.includes(selected) ? selected : null;
+    const remembered = list.last && list.backups.includes(list.last) ? list.last : null;
+    const original = list.backups.includes("batch_rftime_original.rftime")
+      ? "batch_rftime_original.rftime"
+      : "";
+    elements.visualizerBackups.value = requested ?? remembered ?? original;
   } catch {
     visualizer.backupLabels = {};
     elements.visualizerBackups.replaceChildren(new Option("No saved versions yet", ""));
+    updateBackupButtons();
+    return "";
   }
   updateBackupButtons();
+  return elements.visualizerBackups.value;
 }
 
+// returns to the user's last scroll position
 function restoreVisualizerScroll(scrollY) {
   if (scrollY == null) return;
   window.requestAnimationFrame(() => {
@@ -589,7 +638,7 @@ async function saveBounds(options = {}) {
           backup: plan.name,
           project: {
             ...project,
-            outputs: { ...project.outputs, acqTime: true, miscData: true, pdfPlots: true },
+            outputs: { ...project.outputs, acqTime: true, miscData: true },
           },
         };
     if (plan.label && result.backup) {
@@ -650,7 +699,7 @@ async function saveIntegrationEdits(edits, backupName, backupLabel, scrollY, sta
           backup: backupName,
           project: {
             ...project,
-            outputs: { ...project.outputs, acqTime: true, miscData: true, pdfPlots: true },
+            outputs: { ...project.outputs, acqTime: true, miscData: true },
           },
         };
     if (backupLabel && result.backup) {
@@ -714,9 +763,14 @@ async function applyReferenceIntegration() {
   }
 
   const scrollY = window.scrollY;
+  const autoShiftEnabled = elements.visualizerAutoShiftAfterUniform.checked;
+  const stepTotal = autoShiftEnabled ? 4 : 2;
+  await visualizerStep(1, stepTotal, "averaging selected reference bounds...");
   const referenceProfile = averageReferenceProfile(references);
+  await visualizerStep(2, stepTotal, "applying uniform bounds to rendered plots...");
   visualizer.uniformView = null;
-  for (const chart of visualizer.charts) {
+  for (let index = 0; index < visualizer.charts.length; index += 1) {
+    const chart = visualizer.charts[index];
     const domain = visualizerDomain(chart);
     setChartIntegrationByRt(
       chart,
@@ -726,10 +780,17 @@ async function applyReferenceIntegration() {
     chart.hasEdit = true;
     drawChart(chart);
     syncChartReferenceState(chart);
+    await visualizerLoopStep(
+      index,
+      visualizer.charts.length,
+      2,
+      stepTotal,
+      "applying uniform bounds...",
+    );
   }
   updateSaveButton();
   visualizer.pendingSave = { kind: "reference" };
-  if (!elements.visualizerAutoShiftAfterUniform.checked) {
+  if (!autoShiftEnabled) {
     visualizerMessage(
       `Applied reference offsets +${averageStartOffset.toFixed(3)} to +${averageEndOffset.toFixed(3)}. Save is ready.`,
     );
@@ -742,15 +803,33 @@ async function applyReferenceIntegration() {
   let shiftedCount = 0;
   let averageScore = null;
   if (referenceProfile) {
+    await visualizerStep(3, stepTotal, "shifting necessary plots based on cosine similarity score...");
     const shifts = [];
-    for (const chart of visualizer.charts.filter((item) => !item.isReference)) {
+    const candidates = visualizer.charts.filter((item) => !item.isReference);
+    for (let index = 0; index < candidates.length; index += 1) {
+      const chart = candidates[index];
       const shift = bestAutoShift(chart, referenceProfile);
       if (shift) shifts.push({ chart, shift });
+      await visualizerLoopStep(
+        index,
+        candidates.length,
+        3,
+        stepTotal,
+        "checking cosine similarity...",
+      );
     }
-    for (const { chart, shift } of shifts) {
+    for (let index = 0; index < shifts.length; index += 1) {
+      const { chart, shift } = shifts[index];
       setChartIntegrationByRt(chart, shift.rtStart, shift.rtEnd);
       chart.hasEdit = true;
       drawChart(chart);
+      await visualizerLoopStep(
+        index,
+        shifts.length,
+        3,
+        stepTotal,
+        "drawing shifted plots...",
+      );
     }
     shiftedCount = shifts.length;
     if (shifts.length) {
@@ -761,6 +840,7 @@ async function applyReferenceIntegration() {
 
   const timestamp = new Date();
   const plan = numberedBackupPlan("reference", timestamp);
+  await visualizerStep(4, stepTotal, "saving bounds and refreshing RFKit outputs...");
   const result = await saveIntegrationEdits(
     visualizer.charts.filter((chart) => chart.hasEdit).map((chart) => ({
       sampleId: chart.sample.sampleId,
@@ -795,16 +875,26 @@ async function autoShiftFromReferences() {
     showToast("Select at least one reference plot first.", "error");
     return;
   }
+  await visualizerStep(1, 3, "building reference profile...");
   const referenceProfile = averageReferenceProfile(references);
   if (!referenceProfile) {
     showToast("The selected references do not have enough signal to build a profile.", "error");
     return;
   }
+  await visualizerStep(2, 3, "checking plots with cosine similarity...");
   const candidates = visualizer.charts.filter((chart) => !chart.isReference);
   const shifts = [];
-  for (const chart of candidates) {
+  for (let index = 0; index < candidates.length; index += 1) {
+    const chart = candidates[index];
     const shift = bestAutoShift(chart, referenceProfile);
     if (shift) shifts.push({ chart, shift });
+    await visualizerLoopStep(
+      index,
+      candidates.length,
+      2,
+      3,
+      "checking cosine similarity...",
+    );
   }
   if (!shifts.length) {
     visualizerMessage("Auto-shift found no plots that passed the similarity threshold.");
@@ -813,14 +903,23 @@ async function autoShiftFromReferences() {
   }
 
   const scrollY = window.scrollY;
-  for (const { chart, shift } of shifts) {
+  for (let index = 0; index < shifts.length; index += 1) {
+    const { chart, shift } = shifts[index];
     setChartIntegrationByRt(chart, shift.rtStart, shift.rtEnd);
     chart.hasEdit = true;
     drawChart(chart);
+    await visualizerLoopStep(
+      index,
+      shifts.length,
+      2,
+      3,
+      "drawing shifted plots...",
+    );
   }
   updateSaveButton();
   const timestamp = new Date();
   const shiftNumber = nextNumberedBackupNumber("autoshift");
+  await visualizerStep(3, 3, "saving bounds and refreshing RFKit outputs...");
   const result = await saveIntegrationEdits(
     visualizer.charts.filter((chart) => chart.hasEdit).map((chart) => ({
       sampleId: chart.sample.sampleId,
@@ -844,6 +943,7 @@ async function autoShiftFromReferences() {
   }
 }
 
+// restores the selected backup and reruns RFkit
 async function restoreSelectedBackup() {
   const name = elements.visualizerBackups.value;
   if (!project?.path || !name || running || visualizer.rendering) return;
@@ -873,6 +973,7 @@ async function restoreSelectedBackup() {
   }
 }
 
+// deletes a saved backup except original
 async function deleteSelectedBackup() {
   const name = elements.visualizerBackups.value;
   if (!project?.path || !name || name === "batch_rftime_original.rftime" || running || visualizer.rendering) {
@@ -894,13 +995,17 @@ async function deleteSelectedBackup() {
     }
     addActivity(`Deleted ${backupLabel(name)}.`, "success");
     showToast("Backup deleted.");
-    await refreshBoundsBackups();
+    const selected = await refreshBoundsBackups();
+    if (selected === "batch_rftime_original.rftime") {
+      await restoreSelectedBackup();
+    }
   } catch (error) {
     addActivity(String(error), "error");
     showToast(String(error), "error");
   }
 }
 
+// renames the selected backup label
 async function renameSelectedBackup() {
   const name = elements.visualizerBackups.value;
   if (!project?.path || !name || name === "batch_rftime_original.rftime" || running || visualizer.rendering) {
@@ -936,6 +1041,7 @@ async function renameSelectedBackup() {
   }
 }
 
+// fills the transition selector from backend data
 function populateVisualizerTransitions() {
   const query = visualizer.search.trim().toLowerCase();
   const selected = elements.visualizerTransition.value;
@@ -957,10 +1063,12 @@ function populateVisualizerTransitions() {
   }
 }
 
+// reads the active transition option
 function selectedTransitionOption() {
   return elements.visualizerTransition.options[elements.visualizerTransition.selectedIndex] ?? null;
 }
 
+// previews highlighted transition text while minimized
 function previewSelectedTransition() {
   const option = selectedTransitionOption();
   if (option?.value) {
@@ -974,6 +1082,7 @@ function previewSelectedTransition() {
   }
 }
 
+// chooses a chart for keyboard zoom commands
 function fallbackZoomChart() {
   if (visualizer.hoveredChart) return visualizer.hoveredChart;
   return visualizer.charts.find((chart) => {
@@ -982,6 +1091,7 @@ function fallbackZoomChart() {
   }) ?? visualizer.charts[0] ?? null;
 }
 
+// loads transition names and backup state
 async function initializeVisualizer() {
   if (!project) {
     resetVisualizer();
@@ -1018,6 +1128,7 @@ async function initializeVisualizer() {
   }
 }
 
+// reads requested chart dimensions from controls
 function visualizerDimensions() {
   return {
     width: Math.max(260, Math.min(1200, elements.visualizerWidth.valueAsNumber || 420)),
@@ -1025,10 +1136,12 @@ function visualizerDimensions() {
   };
 }
 
+// returns drawable x-axis width
 function plotWidth(chart) {
   return chart.width - chartMargins.left - chartMargins.right;
 }
 
+// returns drawable y-axis height
 function plotHeight(chart) {
   return chart.height - chartMargins.top - chartMargins.bottom;
 }
@@ -1145,6 +1258,7 @@ function baseWellLocalSpan(sample, well) {
   return Math.max(end - start, 0);
 }
 
+// gets a stable middle value for noisy spans
 function medianNumber(values) {
   const sorted = values
     .filter((value) => Number.isFinite(value) && value > 0)
@@ -1156,6 +1270,7 @@ function medianNumber(values) {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+// finds the normal x-axis span for this transition
 function transitionMaxRtSpan(jobs) {
   const median = medianNumber(jobs.map((job) => baseWellLocalSpan(job.sample, job.well)));
   return median ? median * 1.1 : null;
@@ -1195,6 +1310,7 @@ function clampRtWindowToSpan(points, start, end, maxSpan, integrationStart, inte
   };
 }
 
+// finds the strongest signal in a displayed range
 function maximumInRange(points, rtStart, rtEnd) {
   let max = 0;
   for (const point of points) {
@@ -1205,18 +1321,53 @@ function maximumInRange(points, rtStart, rtEnd) {
   return max;
 }
 
+// formats retention time for tooltips
 function formatRt(value) {
   return value.toFixed(2);
 }
 
+// formats local x-axis labels
+function formatAxisRt(value) {
+  if (!Number.isFinite(value) || Math.abs(value) < 0.005) return "0";
+  return value.toFixed(2);
+}
+
+// computes the local x-axis labels for the current view
+function chartAxisLabels(chart) {
+  const domain = visualizerDomain(chart);
+  return {
+    start: formatAxisRt(domain.rtStart),
+    end: formatAxisRt(domain.rtEnd),
+  };
+}
+
+// updates x-axis labels after zooming settles
+function settleChartAxisLabels(chart, immediate = false) {
+  if (!chart) return;
+  window.clearTimeout(chart.axisLabelTimer);
+  const applyLabels = () => {
+    if (!visualizer.charts.includes(chart)) return;
+    chart.axisLabels = chartAxisLabels(chart);
+    drawChart(chart, chart.hoverIndex);
+  };
+  if (immediate) {
+    applyLabels();
+  } else {
+    chart.axisLabelTimer = window.setTimeout(applyLabels, 500);
+  }
+}
+
+// formats intensity for tooltips
 function formatIntensity(value) {
   return Math.round(value).toLocaleString();
 }
 
+// formats one plotted point
 function formatTooltipPoint(point) {
   return `${formatRt(point.rt)}, ${formatIntensity(point.intensity)}`;
 }
 
+// copies backend integration values into chart state
 function integrationFromWell(well) {
   return {
     startIndex: well.startIndex,
@@ -1227,6 +1378,7 @@ function integrationFromWell(well) {
   };
 }
 
+// recalculates area after dragged bounds change
 function calculateArea(points, startIndex, endIndex) {
   let area = 0;
   for (let index = startIndex; index < endIndex; index += 1) {
@@ -1237,6 +1389,7 @@ function calculateArea(points, startIndex, endIndex) {
   return area;
 }
 
+// samples intensity between measured points
 function interpolatedIntensity(points, rt) {
   if (!points.length) return 0;
   if (rt <= points[0].rt) return points[0].intensity;
@@ -1256,6 +1409,7 @@ function interpolatedIntensity(points, rt) {
   return left.intensity + (right.intensity - left.intensity) * amount;
 }
 
+// turns one mound into a comparable shape vector
 function normalizedProfile(points, rtStart, rtEnd, count = autoShift.points) {
   if (!points.length || rtEnd <= rtStart || count < 2) return null;
   const first = points[0].rt;
@@ -1278,11 +1432,13 @@ function normalizedProfile(points, rtStart, rtEnd, count = autoShift.points) {
   };
 }
 
+// scores how similarly two mound shapes point
 function cosineSimilarity(left, right) {
   if (!left || !right || left.length !== right.length) return 0;
   return left.reduce((sum, value, index) => sum + value * right[index], 0);
 }
 
+// averages selected reference mound shapes
 function averageReferenceProfile(references) {
   const profiles = references
     .map((chart) => {
@@ -1327,6 +1483,7 @@ function averageReferenceProfile(references) {
   };
 }
 
+// estimates the native spacing between scan points
 function medianPointSpacing(points) {
   if (points.length < 2) return 0.005;
   const gaps = [];
@@ -1421,6 +1578,7 @@ function bestAutoShift(chart, referenceProfile) {
   return best;
 }
 
+// removes duplicate candidate retention times
 function uniqueSortedNumbers(values, precision = 5) {
   const seen = new Set();
   const output = [];
@@ -1434,6 +1592,7 @@ function uniqueSortedNumbers(values, precision = 5) {
   return output.sort((left, right) => left - right);
 }
 
+// sets chart bounds from two point indices
 function setChartIntegration(chart, firstIndex, secondIndex) {
   const points = chart.sample.points;
   const startIndex = Math.max(0, Math.min(points.length - 2, Math.min(firstIndex, secondIndex)));
@@ -1447,6 +1606,7 @@ function setChartIntegration(chart, firstIndex, secondIndex) {
   };
 }
 
+// sets chart bounds from retention times
 function setChartIntegrationByRt(chart, rtStart, rtEnd) {
   const points = chart.sample.points;
   const startIndex = nearestPoint(points, Math.min(rtStart, rtEnd));
@@ -1454,6 +1614,7 @@ function setChartIntegrationByRt(chart, rtStart, rtEnd) {
   setChartIntegration(chart, startIndex, endIndex);
 }
 
+// compares saved and current bounds
 function integrationsEqual(left, right) {
   if (!left || !right) return false;
   return (
@@ -1464,15 +1625,40 @@ function integrationsEqual(left, right) {
   );
 }
 
+// records whether a chart needs saving
 function markChartDirty(chart) {
   chart.hasEdit = !integrationsEqual(chart.integration, chart.originalIntegration);
   updateSaveButton();
 }
 
+// gives each chart a stable reference key
 function chartReferenceId(sample, well) {
   return `${sample.sampleId}::${well.label}`;
 }
 
+// labels each sample by plate when possible
+function sampleTitle(sample) {
+  return sample.displayName || sample.sampleId;
+}
+
+// converts numeric row labels into plate letters
+function wellTitle(well) {
+  const match = well.label.match(/^\(?\s*(\d+)\s*,\s*(\d+)\s*\)?$/);
+  if (!match) return well.label;
+  const rowNumber = Number(match[1]);
+  const rowLetter =
+    rowNumber >= 1 && rowNumber <= 26
+      ? String.fromCharCode(64 + rowNumber)
+      : match[1];
+  return `(${rowLetter}, ${match[2]})`;
+}
+
+// combines plate and well into the plot title
+function chartTitle(sample, well) {
+  return `${sampleTitle(sample)} ${wellTitle(well)}`;
+}
+
+// shows each reference's local start offset
 function chartReferenceOffsetLabel(chart) {
   const domain = visualizerDomain(chart);
   const startOffset = chart.integration.rtStart - domain.rtStart;
@@ -1480,6 +1666,7 @@ function chartReferenceOffsetLabel(chart) {
   return `start +${startOffset.toFixed(3)}, end +${endOffset.toFixed(3)}`;
 }
 
+// syncs the selected reference styling
 function syncChartReferenceState(chart) {
   chart.isReference = visualizer.referenceIds.has(chart.referenceId);
   chart.shell.classList.toggle("is-reference", chart.isReference);
@@ -1490,6 +1677,7 @@ function syncChartReferenceState(chart) {
     : "select this plot as a reference";
 }
 
+// toggles a plot as a reference
 function toggleChartReference(chart) {
   if (chart.isReference) {
     visualizer.referenceIds.delete(chart.referenceId);
@@ -1503,6 +1691,7 @@ function toggleChartReference(chart) {
   );
 }
 
+// chooses the first x and y window for a chart
 function initialChartView(sample, well) {
   let rtStart = elements.visualizerRtStart.valueAsNumber || 0;
   let rtEnd = elements.visualizerRtEnd.valueAsNumber || 0;
@@ -1539,6 +1728,7 @@ function initialChartView(sample, well) {
   };
 }
 
+// combines chart view and y zoom into draw limits
 function visualizerDomain(chart) {
   if (!chart.view) {
     chart.view = initialChartView(chart.sample, chart.well);
@@ -1550,6 +1740,7 @@ function visualizerDomain(chart) {
   };
 }
 
+// updates the chart x-axis window
 function setChartViewWindow(chart, rtStart, rtEnd) {
   if (!chart?.view) return;
   const first = chart.sample.points[0]?.rt ?? rtStart;
@@ -1576,6 +1767,7 @@ function setChartViewWindow(chart, rtStart, rtEnd) {
   chart.view.baseRtEnd = Math.max(chart.view.baseRtEnd, end);
   chart.view.rtStart = Math.max(first, start);
   chart.view.rtEnd = Math.min(last, end);
+  settleChartAxisLabels(chart);
   const manualYMax = elements.visualizerIntensity.valueAsNumber || 0;
   if (manualYMax > 0) {
     chart.view.baseYMax = manualYMax;
@@ -1600,6 +1792,7 @@ function applyUniformViewToChart(chart) {
   setChartViewWindow(chart, viewStart, viewStart + uniform.viewSpan);
 }
 
+// syncs the horizontal pan slider
 function updatePanSlider(chart) {
   if (!chart.panSlider || !chart.view) return;
   const baseSpan = chart.view.baseRtEnd - chart.view.baseRtStart;
@@ -1615,18 +1808,21 @@ function updatePanSlider(chart) {
   chart.panSlider.value = String(Math.max(0, Math.min(1000, Math.round(value))));
 }
 
+// syncs the vertical zoom slider
 function updateYSlider(chart) {
   if (!chart.ySlider || !chart.view) return;
   const amount = Math.log(chart.view.yMax / chart.view.baseYMax) / Math.log(0.08);
   chart.ySlider.value = String(Math.max(0, Math.min(1000, Math.round(amount * 1000))));
 }
 
+// redraws one chart with the latest hover state
 function redrawChart(chart, hoverIndex = null) {
   updatePanSlider(chart);
   updateYSlider(chart);
   drawChart(chart, hoverIndex);
 }
 
+// converts mouse x-position into retention time
 function chartRtAtClientX(chart, clientX) {
   const rect = chart.canvas.getBoundingClientRect();
   const domain = visualizerDomain(chart);
@@ -1641,10 +1837,12 @@ function chartRtAtClientX(chart, clientX) {
   );
 }
 
+// finds the nearest point under the cursor
 function chartPointIndexAtClientX(chart, clientX) {
   return nearestPoint(chart.sample.points, chartRtAtClientX(chart, clientX));
 }
 
+// checks whether the pointer is inside plot bounds
 function chartPointerInsidePlot(chart, event) {
   const rect = chart.canvas.getBoundingClientRect();
   const x = event.clientX - rect.left;
@@ -1657,6 +1855,7 @@ function chartPointerInsidePlot(chart, event) {
   );
 }
 
+// zooms horizontally around the cursor when possible
 function zoomChartHorizontal(chart, factor, anchorClientX = null) {
   if (!chart?.view) return;
   const baseSpan = chart.view.baseRtEnd - chart.view.baseRtStart;
@@ -1685,6 +1884,7 @@ function zoomChartHorizontal(chart, factor, anchorClientX = null) {
   redrawChart(chart);
 }
 
+// applies vertical zoom from the slider
 function setChartYAmount(chart, amount) {
   if (!chart?.view) return;
   const clamped = Math.max(0, Math.min(1, amount));
@@ -1692,6 +1892,7 @@ function setChartYAmount(chart, amount) {
   redrawChart(chart);
 }
 
+// pans the x-axis from the horizontal slider
 function panChartToSlider(chart) {
   if (!chart?.view || !chart.panSlider || chart.panSlider.disabled) return;
   const baseSpan = chart.view.baseRtEnd - chart.view.baseRtStart;
@@ -1702,10 +1903,27 @@ function panChartToSlider(chart) {
   drawChart(chart);
 }
 
+// reads resolved css custom properties
 function cssColor(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+// caches css colors between redraws
+function chartColors() {
+  if (!visualizer.chartColors) {
+    visualizer.chartColors = {
+      ink: cssColor("--ink"),
+      muted: cssColor("--muted"),
+      line: cssColor("--line"),
+      blue: cssColor("--blue"),
+      green: cssColor("--green"),
+      surface: cssColor("--surface"),
+    };
+  }
+  return visualizer.chartColors;
+}
+
+// finds the closest measured point by rt
 function nearestPoint(points, rt) {
   let low = 0;
   let high = points.length - 1;
@@ -1720,6 +1938,19 @@ function nearestPoint(points, rt) {
   return low;
 }
 
+// binary-searches the first visible point
+function firstPointAtOrAfter(points, rt) {
+  let low = 0;
+  let high = points.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (points[mid].rt < rt) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+// draws the small tooltip box
 function roundedRect(ctx, x, y, width, height, radius = 5) {
   const safeRadius = Math.min(radius, width / 2, height / 2);
   ctx.beginPath();
@@ -1735,24 +1966,24 @@ function roundedRect(ctx, x, y, width, height, radius = 5) {
   ctx.closePath();
 }
 
+// paints one chromatogram canvas
 function drawChart(chart, hoverIndex = null, tooltipText = null) {
   const { canvas, sample, well } = chart;
   const { width, height } = chart;
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.floor(width * ratio);
-  canvas.height = Math.floor(height * ratio);
-  canvas.style.width = `${width}px`;
-  canvas.style.height = `${height}px`;
+  const pixelWidth = Math.floor(width * ratio);
+  const pixelHeight = Math.floor(height * ratio);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+  }
   const ctx = canvas.getContext("2d");
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  const ink = cssColor("--ink");
-  const muted = cssColor("--muted");
-  const line = cssColor("--line");
-  const blue = cssColor("--blue");
-  const green = cssColor("--green");
-  const surface = cssColor("--surface");
+  const { ink, muted, line, blue, green, surface } = chartColors();
   const margins = chartMargins;
   const plotWidth = width - margins.left - margins.right;
   const plotHeight = height - margins.top - margins.bottom;
@@ -1830,9 +2061,13 @@ function drawChart(chart, hoverIndex = null, tooltipText = null) {
 
   ctx.beginPath();
   let started = false;
-  for (let index = 0; index < points.length; index += 1) {
+  const visibleStart = firstPointAtOrAfter(points, domain.rtStart);
+  let visibleEnd = firstPointAtOrAfter(points, domain.rtEnd);
+  while (visibleEnd < points.length && points[visibleEnd].rt <= domain.rtEnd) {
+    visibleEnd += 1;
+  }
+  for (let index = visibleStart; index < visibleEnd; index += 1) {
     const point = points[index];
-    if (point.rt < domain.rtStart || point.rt > domain.rtEnd) continue;
     const px = x(point.rt);
     const py = y(point.intensity);
     if (!started) {
@@ -1850,16 +2085,11 @@ function drawChart(chart, hoverIndex = null, tooltipText = null) {
 
   ctx.fillStyle = ink;
   ctx.globalAlpha = 0.5;
-  const visibleCount = points.reduce(
-    (count, point) =>
-      point.rt >= domain.rtStart && point.rt <= domain.rtEnd ? count + 1 : count,
-    0,
-  );
+  const visibleCount = Math.max(0, visibleEnd - visibleStart);
   const dotEvery = Math.max(1, Math.ceil(visibleCount / 420));
   let visibleIndex = 0;
-  for (let index = 0; index < points.length; index += 1) {
+  for (let index = visibleStart; index < visibleEnd; index += 1) {
     const point = points[index];
-    if (point.rt < domain.rtStart || point.rt > domain.rtEnd) continue;
     if (visibleIndex % dotEvery !== 0) {
       visibleIndex += 1;
       continue;
@@ -1898,13 +2128,14 @@ function drawChart(chart, hoverIndex = null, tooltipText = null) {
   ctx.fillStyle = ink;
   ctx.font = "700 10px Inter, Segoe UI, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(`${sample.sampleId}  ${well.label}`, width / 2, 12);
+  ctx.fillText(chartTitle(sample, well), width / 2, 12);
   ctx.fillStyle = muted;
   ctx.font = "10px ui-monospace, Consolas, monospace";
+  const axisLabels = chart.axisLabels ?? chartAxisLabels(chart);
   ctx.textAlign = "left";
-  ctx.fillText(`${domain.rtStart.toFixed(2)}`, margins.left, height - 5);
+  ctx.fillText(axisLabels.start, margins.left, height - 5);
   ctx.textAlign = "right";
-  ctx.fillText(`${domain.rtEnd.toFixed(2)}`, width - margins.right, height - 5);
+  ctx.fillText(axisLabels.end, width - margins.right, height - 5);
   ctx.fillText(`${Math.round(domain.yMax).toLocaleString()}`, margins.left - 4, margins.top + 4);
   ctx.fillStyle = green;
   ctx.fillText(`area ${Math.round(integration.area).toLocaleString()}`, width - 10, 12);
@@ -1932,6 +2163,7 @@ function drawChart(chart, hoverIndex = null, tooltipText = null) {
   }
 }
 
+// builds one interactive plot shell
 function createChart(sample, well, index) {
   const { width, height } = visualizerDimensions();
   const shell = document.createElement("article");
@@ -1946,7 +2178,7 @@ function createChart(sample, well, index) {
   referenceToggle.className = "reference-toggle";
   referenceToggle.type = "button";
   referenceToggle.setAttribute("aria-pressed", "false");
-  referenceToggle.setAttribute("aria-label", `select ${sample.sampleId} ${well.label} as a reference plot`);
+  referenceToggle.setAttribute("aria-label", `select ${chartTitle(sample, well)} as a reference plot`);
   referenceToggle.innerHTML = `
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M5 12.5 10 17l9-10" />
@@ -1960,7 +2192,7 @@ function createChart(sample, well, index) {
   ySlider.step = "1";
   ySlider.value = "0";
   ySlider.title = "adjust the y-axis scale";
-  ySlider.setAttribute("aria-label", `adjust y-axis scale for ${sample.sampleId} ${well.label}`);
+  ySlider.setAttribute("aria-label", `adjust y-axis scale for ${chartTitle(sample, well)}`);
   frame.append(canvas, referenceToggle, ySlider);
   const panSlider = document.createElement("input");
   panSlider.className = "chart-pan-slider";
@@ -1971,7 +2203,7 @@ function createChart(sample, well, index) {
   panSlider.value = "0";
   panSlider.disabled = true;
   panSlider.title = "pan the zoomed graph left or right";
-  panSlider.setAttribute("aria-label", `pan zoomed graph for ${sample.sampleId} ${well.label}`);
+  panSlider.setAttribute("aria-label", `pan zoomed graph for ${chartTitle(sample, well)}`);
   shell.append(frame, panSlider);
   elements.visualizerPlots.append(shell);
   const originalIntegration = integrationFromWell(well);
@@ -1988,7 +2220,11 @@ function createChart(sample, well, index) {
     width,
     height,
     view: initialChartView(sample, well),
+    axisLabels: null,
+    axisLabelTimer: null,
     hoverX: null,
+    hoverIndex: null,
+    hoverInside: false,
     referenceId: chartReferenceId(sample, well),
     isReference: false,
     originalIntegration,
@@ -2002,6 +2238,7 @@ function createChart(sample, well, index) {
   });
   applyUniformViewToChart(chart);
   syncChartReferenceState(chart);
+  settleChartAxisLabels(chart, true);
   let dragging = false;
   let dragStartIndex = 0;
   let dragStartClientX = 0;
@@ -2030,9 +2267,15 @@ function createChart(sample, well, index) {
   });
   canvas.addEventListener("pointermove", (event) => {
     visualizer.hoveredChart = chart;
-    chart.hoverX = chartPointerInsidePlot(chart, event) ? event.clientX : null;
+    const insidePlot = chartPointerInsidePlot(chart, event);
+    chart.hoverX = insidePlot ? event.clientX : null;
     const pointIndex = chartPointIndexAtClientX(chart, event.clientX);
     const point = sample.points[pointIndex];
+    if (!dragging && chart.hoverIndex === pointIndex && chart.hoverInside === insidePlot) {
+      return;
+    }
+    chart.hoverIndex = pointIndex;
+    chart.hoverInside = insidePlot;
     if (dragging) {
       setChartIntegration(chart, dragStartIndex, pointIndex);
       drawChart(chart, pointIndex, dragTooltip(pointIndex));
@@ -2040,7 +2283,7 @@ function createChart(sample, well, index) {
       drawChart(chart, pointIndex);
     }
     visualizerMessage(
-      `${sample.sampleId} ${well.label}  RT ${point.rt.toFixed(3)}  intensity ${Math.round(point.intensity).toLocaleString()}  apex ${well.apexRt.toFixed(3)}`,
+      `${chartTitle(sample, well)}  RT ${point.rt.toFixed(3)}  intensity ${Math.round(point.intensity).toLocaleString()}  apex ${well.apexRt.toFixed(3)}`,
     );
   });
   const finishDrag = (event) => {
@@ -2053,6 +2296,8 @@ function createChart(sample, well, index) {
     }
     markChartDirty(chart);
     syncChartReferenceState(chart);
+    chart.hoverIndex = pointIndex;
+    chart.hoverInside = chartPointerInsidePlot(chart, event);
     dragging = false;
     preDragIntegration = null;
     canvas.classList.remove("is-dragging");
@@ -2070,6 +2315,8 @@ function createChart(sample, well, index) {
     if (visualizer.hoveredChart === chart) {
       visualizer.hoveredChart = null;
     }
+    chart.hoverIndex = null;
+    chart.hoverInside = false;
     drawChart(chart);
     if (visualizer.data) {
       visualizerMessage(
@@ -2109,6 +2356,7 @@ function createChart(sample, well, index) {
   return chart;
 }
 
+// stops chunked chart creation
 function cancelVisualizerRendering() {
   if (!visualizer.rendering) return;
   visualizer.renderToken += 1;
@@ -2121,6 +2369,7 @@ function cancelVisualizerRendering() {
   visualizerMessage(`Rendering cancelled. ${visualizer.charts.length.toLocaleString()} plots shown.`);
 }
 
+// renders plots in small batches for smoother scrolling
 function renderVisualizerCharts(data, options = {}) {
   visualizer.renderToken += 1;
   const token = visualizer.renderToken;
@@ -2196,6 +2445,7 @@ function renderVisualizerCharts(data, options = {}) {
   requestAnimationFrame(drawBatch);
 }
 
+// loads and renders the selected transition
 async function renderSelectedTransition(options = {}) {
   const transition = elements.visualizerTransition.value;
   if (!transition || visualizer.rendering) return;
@@ -2225,11 +2475,13 @@ async function renderSelectedTransition(options = {}) {
   }
 }
 
+// redraws all plots after size or theme changes
 function redrawVisualizerCharts() {
   if (!visualizer.data || visualizer.rendering) return;
   renderVisualizerCharts(visualizer.data);
 }
 
+// keeps the theme button label accurate
 function updateThemeToggle() {
   const isDark = document.documentElement.dataset.theme === "dark";
   elements.themeToggle.setAttribute(
@@ -2241,10 +2493,12 @@ function updateThemeToggle() {
     : "enable night mode";
 }
 
+// toggles light and dark mode
 async function toggleTheme() {
   const theme =
     document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = theme;
+  visualizer.chartColors = null;
   try {
     localStorage.setItem("rfkit-theme", theme);
   } catch {
@@ -2261,6 +2515,7 @@ async function toggleTheme() {
   for (const chart of visualizer.charts) drawChart(chart);
 }
 
+// opens the slinghub link from the footer
 async function openExternalSling(event) {
   if (!isDesktop) return;
   event.preventDefault();
@@ -2271,6 +2526,7 @@ async function openExternalSling(event) {
   }
 }
 
+// subscribes to tauri worker events
 async function registerDesktopEvents() {
   if (!isDesktop) return;
   await tauri.event.listen("worker-output", ({ payload }) => {
@@ -2281,6 +2537,7 @@ async function registerDesktopEvents() {
   });
 }
 
+// wires the gui once the page is ready
 async function bootstrap() {
   for (const button of elements.chooseButtons) {
     button.addEventListener("click", chooseProject);

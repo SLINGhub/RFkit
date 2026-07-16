@@ -7,3 +7,5 @@ gui/src-tauri/icons/
 gui/dist/windows/RFkit-gui-64BIT-WINDOWS-BUILD.zip
 gui/dist/windows/RFkit-worker.exe
 gui/dist/windows/RFkit GUI.exe
+/RFkit_SCADGENS
+/rfkitdata_old

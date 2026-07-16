@@ -73,8 +73,18 @@ struct VisualizerWindow {
 #[serde(rename_all = "camelCase")]
 struct VisualizerSample {
     sample_id: String,
+    display_name: String,
     points: Vec<VisualizerPoint>,
     wells: Vec<VisualizerWindow>,
+}
+
+struct BatchLayout {
+    plate: Option<usize>,
+    sip: Option<usize>,
+    seq: usize,
+    row: usize,
+    col: usize,
+    time: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -197,6 +207,7 @@ impl<'a> BinReader<'a> {
     }
 }
 
+// stores gui settings in the app config folder
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
@@ -204,11 +215,13 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| error.to_string())
 }
 
+// reads saved gui settings if present
 fn read_settings(app: &AppHandle) -> Option<Settings> {
     let contents = fs::read(settings_path(app).ok()?).ok()?;
     serde_json::from_slice(&contents).ok()
 }
 
+// writes gui settings atomically enough for small files
 fn write_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     let settings_path = settings_path(app)?;
     if let Some(parent) = settings_path.parent() {
@@ -218,12 +231,14 @@ fn write_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     fs::write(settings_path, json).map_err(|error| error.to_string())
 }
 
+// remembers the last selected project
 fn save_project(app: &AppHandle, project: &Path) -> Result<(), String> {
     let mut settings = read_settings(app).unwrap_or_default();
     settings.last_project = project.to_string_lossy().into_owned();
     write_settings(app, &settings)
 }
 
+// appends .exe only on windows
 fn worker_name(base: &str) -> String {
     if cfg!(windows) {
         format!("{base}.exe")
@@ -236,6 +251,7 @@ fn is_file(path: &Path) -> bool {
     path.is_file()
 }
 
+// finds the repository root in dev builds
 fn source_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -281,91 +297,7 @@ fn find_worker(project: &Path) -> Option<PathBuf> {
         .find(|path| is_file(path))
 }
 
-// finds the plotting script beside the app or in the dataset
-fn find_plot_script(project: &Path) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    candidates.push(project.join("RFkit_plot.r"));
-    if let Ok(executable) = std::env::current_exe()
-        && let Some(directory) = executable.parent()
-    {
-        candidates.push(directory.join("RFkit_plot.r"));
-        if let Some(contents_directory) = directory.parent() {
-            candidates.push(contents_directory.join("Resources").join("RFkit_plot.r"));
-        }
-    }
-    candidates.push(source_root().join("RFkit_plot.r"));
-    candidates.into_iter().find(|path| path.is_file())
-}
-
-fn command_runs(program: &Path) -> bool {
-    Command::new(program)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
-}
-
-// accepts an explicit rscript path before searching common installs
-fn find_rscript() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("RFKIT_RSCRIPT").map(PathBuf::from)
-        && (path.is_file() || command_runs(&path))
-    {
-        return Some(path);
-    }
-
-    let path_name = PathBuf::from("Rscript");
-    if command_runs(&path_name) {
-        return Some(path_name);
-    }
-
-    find_installed_rscript()
-}
-
-#[cfg(target_os = "windows")]
-fn find_installed_rscript() -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(path) = std::env::var_os("ProgramFiles") {
-        roots.push(PathBuf::from(path).join("R"));
-    }
-    if let Some(path) = std::env::var_os("ProgramFiles(x86)") {
-        roots.push(PathBuf::from(path).join("R"));
-    }
-
-    let mut candidates = Vec::new();
-    for root in roots.into_iter().filter(|root| root.is_dir()) {
-        if let Ok(entries) = fs::read_dir(root) {
-            for version in entries.filter_map(Result::ok).map(|entry| entry.path()) {
-                candidates.push(version.join("bin").join("Rscript.exe"));
-                candidates.push(version.join("bin").join("x64").join("Rscript.exe"));
-            }
-        }
-    }
-    candidates.sort_unstable();
-    candidates.reverse();
-    candidates.into_iter().find(|path| path.is_file())
-}
-
-#[cfg(target_os = "macos")]
-fn find_installed_rscript() -> Option<PathBuf> {
-    [
-        "/Library/Frameworks/R.framework/Resources/bin/Rscript",
-        "/opt/homebrew/bin/Rscript",
-        "/usr/local/bin/Rscript",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|path| path.is_file())
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn find_installed_rscript() -> Option<PathBuf> {
-    ["/usr/bin/Rscript", "/usr/local/bin/Rscript"]
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|path| path.is_file())
-}
-
+// resolves param.txt paths against the dataset folder
 fn project_file(project: &Path, value: &str) -> PathBuf {
     let path = PathBuf::from(value);
     if path.is_absolute() {
@@ -375,6 +307,7 @@ fn project_file(project: &Path, value: &str) -> PathBuf {
     }
 }
 
+// shows paths relative to the dataset when possible
 fn display_name(project: &Path, path: &Path) -> String {
     path.strip_prefix(project)
         .unwrap_or(path)
@@ -382,6 +315,7 @@ fn display_name(project: &Path, path: &Path) -> String {
         .into_owned()
 }
 
+// rejects backup names that could leave the backup folder
 fn safe_backup_name(name: &str) -> Result<&str, String> {
     if name.is_empty()
         || name == "."
@@ -395,6 +329,7 @@ fn safe_backup_name(name: &str) -> Result<&str, String> {
     Ok(name)
 }
 
+// keeps renamed backup labels small and printable
 fn safe_backup_label(label: &str) -> Result<String, String> {
     let label = label.trim();
     if label.is_empty() {
@@ -406,6 +341,7 @@ fn safe_backup_label(label: &str) -> Result<String, String> {
     Ok(label.to_string())
 }
 
+// keeps original at the top of the backup menu
 fn order_backups(mut backups: Vec<String>) -> Vec<String> {
     backups.sort_unstable();
     if let Some(index) = backups
@@ -418,6 +354,7 @@ fn order_backups(mut backups: Vec<String>) -> Vec<String> {
     backups
 }
 
+// saves the first untouched batch.rftime
 fn capture_original_bounds(project: &Path) -> Result<(), String> {
     let source = project.join("batch.rftime");
     if !source.is_file() {
@@ -430,6 +367,7 @@ fn capture_original_bounds(project: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+// creates the protected original backup if missing
 fn ensure_original_bounds(project: &Path) -> Result<(), String> {
     if !project
         .join(BOUNDS_BACKUP_DIR)
@@ -441,6 +379,7 @@ fn ensure_original_bounds(project: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// copies current batch.rftime into a named backup
 fn backup_bounds(project: &Path, name: &str) -> Result<Option<String>, String> {
     let name = safe_backup_name(name)?;
     let source = project.join("batch.rftime");
@@ -453,6 +392,7 @@ fn backup_bounds(project: &Path, name: &str) -> Result<Option<String>, String> {
     Ok(Some(name.to_string()))
 }
 
+// reads the retention-time offset from param.txt
 fn read_offset(project: &Path) -> Result<f32, String> {
     let param = fs::read_to_string(project.join("param.txt")).map_err(|error| error.to_string())?;
     let value = param
@@ -469,6 +409,7 @@ fn read_offset(project: &Path) -> Result<f32, String> {
         .ok_or_else(|| "offset is missing from param.txt".to_string())
 }
 
+// extracts the numeric sequence from sequencex.mzML
 fn sample_sequence(sample_id: &str) -> Result<u8, String> {
     sample_id
         .trim()
@@ -483,6 +424,123 @@ fn sample_sequence(sample_id: &str) -> Result<u8, String> {
         .map_err(|error| error.to_string())
 }
 
+// keeps spaced plate names intact in tabbed data rows
+fn split_batch_line(line: &str) -> Vec<String> {
+    if line.contains('\t') {
+        line.split('\t')
+            .map(|cell| cell.trim().to_string())
+            .collect()
+    } else {
+        line.split_whitespace().map(str::to_string).collect()
+    }
+}
+
+// reads batch.rftime columns by name when headers are available
+fn batch_layout(rows: &[Vec<String>]) -> BatchLayout {
+    let headers: Vec<String> = rows
+        .first()
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.trim().to_ascii_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+    let index = |name: &str| headers.iter().position(|header| header == name);
+    BatchLayout {
+        plate: index("plate"),
+        sip: index("sip"),
+        seq: index("seq").unwrap_or(2),
+        row: index("row").unwrap_or(3),
+        col: index("col").unwrap_or(4),
+        time: index("siptime").or_else(|| index("time")).unwrap_or(5),
+    }
+}
+
+// maps each sequence file back to its plate label
+fn plate_by_sequence(project: &Path) -> HashMap<u8, String> {
+    let path = project.join("batch.rftime");
+    let Ok(contents) = fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let rows: Vec<Vec<String>> = contents.lines().map(split_batch_line).collect();
+    let layout = batch_layout(&rows);
+    let Some(plate_index) = layout.plate else {
+        return HashMap::new();
+    };
+    let mut plates = HashMap::new();
+    for row in rows.iter().skip(2) {
+        if row.len() <= layout.seq || row.len() <= plate_index {
+            continue;
+        }
+        let Ok(sequence) = row[layout.seq].trim().parse::<u8>() else {
+            continue;
+        };
+        let plate = row[plate_index].trim();
+        if !plate.is_empty() {
+            plates.entry(sequence).or_insert_with(|| plate.to_string());
+        }
+    }
+    plates
+}
+
+// maps each well to the acquisition sip order from batch.rftime
+fn sip_order_by_well(project: &Path) -> HashMap<(u8, u8, u8), u32> {
+    let path = project.join("batch.rftime");
+    let Ok(contents) = fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let rows: Vec<Vec<String>> = contents.lines().map(split_batch_line).collect();
+    let layout = batch_layout(&rows);
+    let Some(sip_index) = layout.sip else {
+        return HashMap::new();
+    };
+
+    let mut order = HashMap::new();
+    for row in rows.iter().skip(2) {
+        if row.len() <= layout.seq
+            || row.len() <= layout.row
+            || row.len() <= layout.col
+            || row.len() <= sip_index
+        {
+            continue;
+        }
+        if row[layout.row].trim() == "3001" {
+            continue;
+        }
+        let (Ok(sequence), Ok(well_row), Ok(well_column), Ok(sip)) = (
+            row[layout.seq].trim().parse::<u8>(),
+            row[layout.row].trim().parse::<u8>(),
+            row[layout.col].trim().parse::<u8>(),
+            row[sip_index].trim().parse::<u32>(),
+        ) else {
+            continue;
+        };
+        order.insert((sequence, well_row, well_column), sip);
+    }
+    order
+}
+
+// makes sequence labels match the plate wording in batch.rftime
+fn sample_display_name(sample_id: &str, plates: &HashMap<u8, String>) -> String {
+    sample_sequence(sample_id)
+        .ok()
+        .and_then(|sequence| {
+            plates.get(&sequence).map(|plate| {
+                let plate_number = plate
+                    .chars()
+                    .filter(char::is_ascii_digit)
+                    .collect::<String>();
+                if plate_number.is_empty() {
+                    plate.to_string()
+                } else {
+                    format!("plate {plate_number}")
+                }
+            })
+        })
+        .unwrap_or_else(|| sample_id.to_string())
+}
+
+// reads labels like (4, 12) from the RFkit plot binary
 fn parse_well_label(label: &str) -> Result<(u8, u8), String> {
     let label = label.trim().trim_start_matches('(').trim_end_matches(')');
     let (row, column) = label
@@ -499,14 +557,20 @@ fn parse_well_label(label: &str) -> Result<(u8, u8), String> {
     ))
 }
 
-fn update_time_cell(cells: &mut Vec<String>, seconds: f32) -> Result<(), String> {
-    if cells.len() <= 5 {
+// writes updated integration times back into the parsed row
+fn update_time_cell(
+    cells: &mut Vec<String>,
+    time_index: usize,
+    seconds: f32,
+) -> Result<(), String> {
+    if cells.len() <= time_index {
         return Err("batch.rftime does not contain a time column".to_string());
     }
-    cells[5] = format!("{seconds:.3}");
+    cells[time_index] = format!("{seconds:.3}");
     Ok(())
 }
 
+// applies dragged bounds to the matching start and sensor rows
 fn save_bounds_to_batch(project: &Path, edits: &[BoundEdit]) -> Result<usize, String> {
     if edits.is_empty() {
         return Ok(0);
@@ -517,31 +581,30 @@ fn save_bounds_to_batch(project: &Path, edits: &[BoundEdit]) -> Result<usize, St
     }
     let offset = read_offset(project)?;
     let contents = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-    let mut rows: Vec<Vec<String>> = contents
-        .lines()
-        .map(|line| line.split('\t').map(str::to_string).collect())
-        .collect();
+    let mut rows: Vec<Vec<String>> = contents.lines().map(split_batch_line).collect();
     if rows.len() < 3 {
         return Err("batch.rftime is missing acquisition rows".to_string());
     }
 
+    let layout = batch_layout(&rows);
     let mut starts = HashMap::<(u8, u8, u8), usize>::new();
     let mut ends = HashMap::<(u8, u8, u8), usize>::new();
     let mut current: Option<(u8, u8, u8)> = None;
     for (index, row) in rows.iter().enumerate().skip(2) {
-        if row.len() <= 5 {
+        if row.len() <= layout.seq || row.len() <= layout.row || row.len() <= layout.col {
             continue;
         }
-        let Ok(sequence) = row[2].trim().parse::<u8>() else {
+        let Ok(sequence) = row[layout.seq].trim().parse::<u8>() else {
             continue;
         };
-        if row[3].trim() == "3001" {
+        if row[layout.row].trim() == "3001" {
             if let Some(key) = current.take() {
                 ends.insert(key, index);
             }
-        } else if let (Ok(well_row), Ok(well_column)) =
-            (row[3].trim().parse::<u8>(), row[4].trim().parse::<u8>())
-        {
+        } else if let (Ok(well_row), Ok(well_column)) = (
+            row[layout.row].trim().parse::<u8>(),
+            row[layout.col].trim().parse::<u8>(),
+        ) {
             let key = (sequence, well_row, well_column);
             starts.insert(key, index);
             current = Some(key);
@@ -572,8 +635,8 @@ fn save_bounds_to_batch(project: &Path, edits: &[BoundEdit]) -> Result<usize, St
         };
         let start_seconds = (low - offset) * 60.0;
         let end_seconds = (high - offset) * 60.0;
-        update_time_cell(&mut rows[start_index], start_seconds)?;
-        update_time_cell(&mut rows[end_index], end_seconds)?;
+        update_time_cell(&mut rows[start_index], layout.time, start_seconds)?;
+        update_time_cell(&mut rows[end_index], layout.time, end_seconds)?;
         written += 1;
     }
 
@@ -587,6 +650,7 @@ fn save_bounds_to_batch(project: &Path, edits: &[BoundEdit]) -> Result<usize, St
     Ok(written)
 }
 
+// counts mzml inputs recursively
 fn count_mzml_files(directory: &Path) -> usize {
     let mut count = 0;
     let mut stack = vec![directory.to_path_buf()];
@@ -610,6 +674,7 @@ fn count_mzml_files(directory: &Path) -> usize {
     count
 }
 
+// counts usable transition rows after the csv header
 fn count_transition_rows(path: &Path) -> usize {
     let Ok(contents) = fs::read_to_string(path) else {
         return 0;
@@ -622,6 +687,7 @@ fn count_transition_rows(path: &Path) -> usize {
         .count()
 }
 
+// checks whether expected output files exist
 fn has_matching_file(project: &Path, prefix: &str, extension: &str) -> bool {
     fs::read_dir(project)
         .ok()
@@ -642,6 +708,7 @@ fn has_matching_file(project: &Path, prefix: &str, extension: &str) -> bool {
         })
 }
 
+// lists plot binaries in numeric sequence order
 fn plot_files(project: &Path) -> Result<Vec<PathBuf>, String> {
     let misc = project.join("misc");
     if !project.is_dir() {
@@ -662,13 +729,21 @@ fn plot_files(project: &Path) -> Result<Vec<PathBuf>, String> {
                     .is_some_and(|name| name.starts_with("plot_") && name.ends_with(".bin"))
         })
         .collect();
-    files.sort_unstable();
+    files.sort_by(|left, right| {
+        let left_id = sample_id_from_plot(left);
+        let right_id = sample_id_from_plot(right);
+        match (sample_sequence(&left_id), sample_sequence(&right_id)) {
+            (Ok(left_sequence), Ok(right_sequence)) => left_sequence.cmp(&right_sequence),
+            _ => left.cmp(right),
+        }
+    });
     if files.is_empty() {
         return Err("no RFkit plot data was found in misc".to_string());
     }
     Ok(files)
 }
 
+// strips plot_ and .bin from an RFkit plot filename
 fn sample_id_from_plot(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -678,6 +753,7 @@ fn sample_id_from_plot(path: &Path) -> String {
         .to_string()
 }
 
+// skips wells for transitions that are not being rendered
 fn skip_wells(reader: &mut BinReader<'_>) -> Result<(), String> {
     let well_count = reader.u8()?;
     for _ in 0..well_count {
@@ -687,12 +763,14 @@ fn skip_wells(reader: &mut BinReader<'_>) -> Result<(), String> {
     Ok(())
 }
 
+// skips a full transition block in the binary plot file
 fn skip_transition(reader: &mut BinReader<'_>) -> Result<(), String> {
     let point_count = usize::from(reader.u16()?);
     reader.skip(point_count * 8)?;
     skip_wells(reader)
 }
 
+// reads the transition names stored in a plot binary
 fn transition_names(path: &Path) -> Result<Vec<String>, String> {
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     let mut reader = BinReader::new(&bytes);
@@ -706,6 +784,7 @@ fn transition_names(path: &Path) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+// converts raw RFkit indices into a renderable integration window
 fn parse_window(
     points: &[VisualizerPoint],
     label: String,
@@ -759,6 +838,8 @@ fn parse_window(
 fn parse_selected_transition(
     path: &Path,
     transition: &str,
+    plates: &HashMap<u8, String>,
+    sip_order: &HashMap<(u8, u8, u8), u32>,
 ) -> Result<Option<VisualizerSample>, String> {
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     let mut reader = BinReader::new(&bytes);
@@ -780,7 +861,7 @@ fn parse_selected_transition(
         }
         let well_count = reader.u8()?;
         let mut wells = Vec::with_capacity(usize::from(well_count));
-        for _ in 0..well_count {
+        for well_index in 0..usize::from(well_count) {
             let label = reader.string()?;
             let start = reader.u16()?;
             let end = reader.u16()?;
@@ -792,18 +873,32 @@ fn parse_selected_transition(
                 && well.area.is_finite()
                 && well.area > 0.0
             {
-                wells.push(well);
+                wells.push((well_index, well));
             }
         }
+        let sample_id = sample_id_from_plot(path);
+        if let Ok(sequence) = sample_sequence(&sample_id) {
+            wells.sort_by_key(|(well_index, well)| {
+                let sip = parse_well_label(&well.label)
+                    .ok()
+                    .and_then(|(well_row, well_column)| {
+                        sip_order.get(&(sequence, well_row, well_column)).copied()
+                    })
+                    .unwrap_or(u32::MAX);
+                (sip, *well_index)
+            });
+        }
         return Ok(Some(VisualizerSample {
-            sample_id: sample_id_from_plot(path),
+            display_name: sample_display_name(&sample_id, plates),
+            sample_id,
             points,
-            wells,
+            wells: wells.into_iter().map(|(_, well)| well).collect(),
         }));
     }
     Ok(None)
 }
 
+// validates a dataset and summarizes its outputs
 fn inspect_project(project: &Path) -> ProjectSummary {
     let mut issues = Vec::new();
     let mut transition_file = None;
@@ -812,8 +907,6 @@ fn inspect_project(project: &Path) -> ProjectSummary {
     let mzml_dir = project.join("mzml_dir");
     let mzml_count = count_mzml_files(&mzml_dir);
     let worker = find_worker(project);
-    let plot_script = find_plot_script(project);
-    let rscript = find_rscript();
 
     if !param_path.is_file() {
         issues.push("param.txt was not found".to_string());
@@ -864,15 +957,6 @@ fn inspect_project(project: &Path) -> ProjectSummary {
     if worker.is_none() {
         issues.push("the RFkit processing engine was not found".to_string());
     }
-    if plot_script.is_none() {
-        issues.push("RFkit_plot.r was not found".to_string());
-    }
-    if rscript.is_none() {
-        issues.push(
-            "Rscript was not found. Install R or set RFKIT_RSCRIPT to the full Rscript executable path."
-                .to_string(),
-        );
-    }
 
     let outputs = ProjectOutputs {
         acq_time: project.join("acq_time.csv").is_file(),
@@ -901,6 +985,7 @@ fn inspect_project(project: &Path) -> ProjectSummary {
 }
 
 #[tauri::command]
+// opens the slinghub page with the system browser
 fn open_sling() -> Result<(), String> {
     const SLING_URL: &str = "https://sling.sg/";
 
@@ -934,6 +1019,7 @@ fn open_sling() -> Result<(), String> {
 }
 
 #[tauri::command]
+// returns transition names for the selector
 fn visualizer_list_transitions(project_path: String) -> Result<Vec<String>, String> {
     let project = PathBuf::from(project_path);
     let first = plot_files(&project)?
@@ -944,6 +1030,7 @@ fn visualizer_list_transitions(project_path: String) -> Result<Vec<String>, Stri
 }
 
 #[tauri::command]
+// reads one transition from every plot binary
 fn visualizer_transition(
     project_path: String,
     transition: String,
@@ -958,9 +1045,11 @@ fn visualizer_transition(
     let mut global_rt_max = f32::NEG_INFINITY;
     let mut global_intensity_max = 0.0_f32;
     let mut transition_seen = false;
+    let plates = plate_by_sequence(&project);
+    let sip_order = sip_order_by_well(&project);
 
     for path in plot_files(&project)? {
-        match parse_selected_transition(&path, &transition)? {
+        match parse_selected_transition(&path, &transition, &plates, &sip_order)? {
             Some(sample) => {
                 transition_seen = true;
                 if !sample.wells.is_empty() {
@@ -1002,6 +1091,7 @@ fn visualizer_transition(
 }
 
 #[tauri::command]
+// lists saved batch.rftime versions
 fn visualizer_list_bounds_backups(
     app: AppHandle,
     project_path: String,
@@ -1053,6 +1143,7 @@ fn visualizer_list_bounds_backups(
 }
 
 #[tauri::command]
+// renames the visible backup label
 fn visualizer_rename_bounds_backup(
     app: AppHandle,
     project_path: String,
@@ -1081,6 +1172,7 @@ fn visualizer_rename_bounds_backup(
 }
 
 #[tauri::command]
+// removes a saved backup file
 fn visualizer_delete_bounds_backup(
     app: AppHandle,
     project_path: String,
@@ -1120,11 +1212,13 @@ fn visualizer_delete_bounds_backup(
     write_settings(&app, &settings)
 }
 
+// reruns RFkit after batch.rftime changes
 fn rerun_after_bounds_change(app: AppHandle, project: PathBuf) -> Result<ProjectSummary, String> {
     run_worker(app, project)
 }
 
 #[tauri::command]
+// restores a backup and refreshes plots
 async fn visualizer_restore_bounds_backup(
     app: AppHandle,
     state: State<'_, RunState>,
@@ -1176,6 +1270,7 @@ async fn visualizer_restore_bounds_backup(
 }
 
 #[tauri::command]
+// saves edited bounds and refreshes plots
 async fn visualizer_save_bounds(
     app: AppHandle,
     state: State<'_, RunState>,
@@ -1230,6 +1325,7 @@ async fn visualizer_save_bounds(
 }
 
 #[tauri::command]
+// loads remembered project state on startup
 fn load_startup_state(app: AppHandle) -> StartupState {
     let settings = read_settings(&app);
     let remembered = settings.as_ref().and_then(|settings| {
@@ -1250,6 +1346,7 @@ fn load_startup_state(app: AppHandle) -> StartupState {
 }
 
 #[tauri::command]
+// selects and remembers a project folder
 fn select_project(app: AppHandle, path: String) -> Result<ProjectSummary, String> {
     let project = PathBuf::from(path);
     if !project.is_dir() {
@@ -1260,6 +1357,7 @@ fn select_project(app: AppHandle, path: String) -> Result<ProjectSummary, String
 }
 
 #[tauri::command]
+// refreshes project state without changing settings
 fn refresh_project(path: String) -> Result<ProjectSummary, String> {
     let project = PathBuf::from(path);
     if !project.is_dir() {
@@ -1269,6 +1367,7 @@ fn refresh_project(path: String) -> Result<ProjectSummary, String> {
 }
 
 #[tauri::command]
+// saves the preferred theme
 fn set_theme(app: AppHandle, theme: String) -> Result<(), String> {
     if theme != "light" && theme != "dark" {
         return Err("the interface theme must be light or dark".to_string());
@@ -1278,6 +1377,7 @@ fn set_theme(app: AppHandle, theme: String) -> Result<(), String> {
     write_settings(&app, &settings)
 }
 
+// streams worker output back to the ui
 fn forward_output<R: Read>(
     reader: R,
     app: &AppHandle,
@@ -1306,6 +1406,7 @@ fn forward_output<R: Read>(
     Ok(())
 }
 
+// emits one worker log line
 fn emit_output(app: &AppHandle, stream: &str, prefix: &str, line: &[u8]) {
     let text = String::from_utf8_lossy(line).trim().to_string();
     if text.is_empty() {
@@ -1320,6 +1421,7 @@ fn emit_output(app: &AppHandle, stream: &str, prefix: &str, line: &[u8]) {
     );
 }
 
+// emits worker running state
 fn emit_status(app: &AppHandle, status: &str) {
     let _ = app.emit(
         "run-state",
@@ -1329,12 +1431,11 @@ fn emit_status(app: &AppHandle, status: &str) {
     );
 }
 
+// runs one RFkit command step
 fn run_worker_command(
     app: &AppHandle,
     project: &Path,
     worker: &Path,
-    plot_script: &Path,
-    rscript: &Path,
     arg: &str,
     label: &str,
 ) -> Result<(), String> {
@@ -1351,8 +1452,6 @@ fn run_worker_command(
         .arg(arg)
         .current_dir(project)
         .env("RFKIT_PROJECT_DIR", project)
-        .env("RFKIT_PLOT_SCRIPT", plot_script)
-        .env("RFKIT_RSCRIPT", rscript)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -1391,6 +1490,7 @@ fn run_worker_command(
     Ok(())
 }
 
+// runs acquisition timing and gui plot data steps
 fn run_worker(app: AppHandle, project: PathBuf) -> Result<ProjectSummary, String> {
     let summary = inspect_project(&project);
     if !summary.can_run {
@@ -1398,35 +1498,20 @@ fn run_worker(app: AppHandle, project: PathBuf) -> Result<ProjectSummary, String
     }
     let worker = find_worker(&project)
         .ok_or_else(|| "the RFkit processing engine was not found".to_string())?;
-    let plot_script =
-        find_plot_script(&project).ok_or_else(|| "RFkit_plot.r was not found".to_string())?;
-    let rscript = find_rscript().ok_or_else(|| {
-        "Rscript was not found. Install R or set RFKIT_RSCRIPT to the full Rscript executable path."
-            .to_string()
-    })?;
 
+    run_worker_command(&app, &project, &worker, "1", "acquisition time generation")?;
     run_worker_command(
         &app,
         &project,
         &worker,
-        &plot_script,
-        &rscript,
-        "1",
-        "acquisition time generation",
-    )?;
-    run_worker_command(
-        &app,
-        &project,
-        &worker,
-        &plot_script,
-        &rscript,
-        "2",
-        "area calculation and plotting",
+        "2only",
+        "area calculation and gui plot data",
     )?;
     Ok(inspect_project(&project))
 }
 
 #[tauri::command]
+// runs RFkit while preventing duplicate runs
 async fn run_all(
     app: AppHandle,
     state: State<'_, RunState>,
@@ -1502,5 +1587,69 @@ mod tests {
         fs::write(&path, "# note\nID,q1,q3\nA,1,2\n\nB,3,4\n").unwrap();
         assert_eq!(count_transition_rows(&path), 2);
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn plate_labels_are_read_from_space_aligned_batch_file() {
+        let project = std::env::temp_dir().join(format!(
+            "rfkit_plate_labels_{}_{}",
+            std::process::id(),
+            "test"
+        ));
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join("batch.rftime"),
+            "plate     sip    seq    row     col     siptime     sipsensor\n------------------------------------------------------------------------\nPlate1 1 1 1 1 3.073 0\nPlate2 1 2 1 1 3.073 0\n",
+        )
+        .unwrap();
+        let plates = plate_by_sequence(&project);
+        assert_eq!(sample_display_name("sequence1.mzML", &plates), "plate 1");
+        assert_eq!(sample_display_name("sequence2.mzML", &plates), "plate 2");
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn tabbed_batch_rows_keep_spaced_plate_names() {
+        let project = std::env::temp_dir().join(format!(
+            "rfkit_spaced_plate_labels_{}_{}",
+            std::process::id(),
+            "test"
+        ));
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join("batch.rftime"),
+            "plate     sip    seq    row     col     siptime     sipsensor\n------------------------------------------------------------------------\nPlate 1 EMD\t1\t1\t2\t1\t3.809\t1\nPlate 1 EMD\t2\t1\t3001\t3\t15.095\t1\n",
+        )
+        .unwrap();
+
+        let plates = plate_by_sequence(&project);
+        assert_eq!(plates.get(&1).map(String::as_str), Some("Plate 1 EMD"));
+        assert_eq!(sample_display_name("sequence1.mzML", &plates), "plate 1");
+
+        let sip_order = sip_order_by_well(&project);
+        assert_eq!(sip_order.get(&(1, 2, 1)).copied(), Some(1));
+        assert_eq!(sip_order.len(), 1);
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn plot_files_sort_by_numeric_sequence() {
+        let project =
+            std::env::temp_dir().join(format!("rfkit_plot_sort_{}_{}", std::process::id(), "test"));
+        let misc = project.join("misc");
+        fs::create_dir_all(&misc).unwrap();
+        fs::write(misc.join("plot_sequence10.mzML.bin"), []).unwrap();
+        fs::write(misc.join("plot_sequence2.mzML.bin"), []).unwrap();
+        fs::write(misc.join("plot_sequence1.mzML.bin"), []).unwrap();
+        let names: Vec<String> = plot_files(&project)
+            .unwrap()
+            .into_iter()
+            .map(|path| sample_id_from_plot(&path))
+            .collect();
+        assert_eq!(
+            names,
+            vec!["sequence1.mzML", "sequence2.mzML", "sequence10.mzML"]
+        );
+        fs::remove_dir_all(project).unwrap();
     }
 }

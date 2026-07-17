@@ -9,3 +9,5 @@ gui/dist/windows/RFkit-worker.exe
 gui/dist/windows/RFkit GUI.exe
 /RFkit_SCADGENS
 /rfkitdata_old
+gui/dist/windows/rfkit-gui.exe
+gui/dist/windows/RFkit-gui-64BIT-WINDOWS-BUILD5.zip

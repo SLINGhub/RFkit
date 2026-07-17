@@ -24,6 +24,8 @@ const elements = {
     document.querySelector("#modal-choose-project"),
   ],
   runButton: document.querySelector("#run-all"),
+  goVisualizerButton: document.querySelector("#go-visualizer"),
+  editDataButton: document.querySelector("#edit-data-tab"),
   runTab: document.querySelector("#run-tab"),
   visualizerTab: document.querySelector("#visualizer-tab"),
   runView: document.querySelector("#run-view"),
@@ -58,9 +60,24 @@ const elements = {
   activityLog: document.querySelector("#activity-log"),
   toastRegion: document.querySelector("#toast-region"),
   externalSlingLinks: [...document.querySelectorAll(".external-sling-link")],
+  dataEditorModal: document.querySelector("#data-editor-modal"),
+  dataEditorFiles: document.querySelector("#data-editor-files"),
+  dataEditorCurrent: document.querySelector("#data-editor-current"),
+  dataEditorStatus: document.querySelector("#data-editor-status"),
+  dataEditorBackups: document.querySelector("#data-editor-backups"),
+  dataEditorRestore: document.querySelector("#data-editor-restore"),
+  dataEditorRename: document.querySelector("#data-editor-rename"),
+  dataEditorDelete: document.querySelector("#data-editor-delete"),
+  dataEditorRefresh: document.querySelector("#data-editor-refresh"),
+  dataEditorSave: document.querySelector("#data-editor-save"),
+  dataEditorClose: document.querySelector("#data-editor-close"),
+  dataEditorTableActions: document.querySelector("#data-editor-table-actions"),
+  dataEditorAddRow: document.querySelector("#data-editor-add-row"),
+  dataEditorAddColumn: document.querySelector("#data-editor-add-column"),
+  dataEditorBody: document.querySelector("#data-editor-body"),
   outputs: {
     acqTime: document.querySelector("#output-acq"),
-    longCsv: document.querySelector("#output-long"),
+    resultsCsv: document.querySelector("#output-results"),
     miscData: document.querySelector("#output-misc"),
   },
 };
@@ -95,6 +112,14 @@ const autoShift = {
   apexFractionTolerance: 0.28,
 };
 
+const dataEditor = {
+  files: [],
+  current: null,
+  content: null,
+  viewingBackup: "",
+  dirty: false,
+};
+
 const mockProject = {
   name: "RFkit-Dataset",
   path: "C:\\Users\\arthur\\Documents\\RFkit-Dataset",
@@ -106,7 +131,7 @@ const mockProject = {
   canRun: true,
   outputs: {
     acqTime: false,
-    longCsv: false,
+    resultsCsv: false,
     miscData: false,
   },
 };
@@ -309,7 +334,7 @@ async function runAll() {
         ...project,
         outputs: {
           acqTime: true,
-          longCsv: true,
+          resultsCsv: true,
           miscData: true,
         },
       });
@@ -332,6 +357,368 @@ async function runAll() {
   } finally {
     setRunning(false);
   }
+}
+
+// updates the data editor status line
+function dataEditorStatus(message) {
+  elements.dataEditorStatus.textContent = message;
+}
+
+// shows editable files found in the dataset
+function renderDataEditorFiles() {
+  elements.dataEditorFiles.replaceChildren();
+  for (const file of dataEditor.files) {
+    const button = document.createElement("button");
+    button.className = "data-editor-file";
+    button.type = "button";
+    button.classList.toggle("active", dataEditor.current?.kind === file.kind);
+
+    const title = document.createElement("strong");
+    title.textContent = file.title;
+    const name = document.createElement("span");
+    name.textContent = file.name;
+    button.append(title, name);
+    button.addEventListener("click", () => openDataEditorFile(file.kind));
+    elements.dataEditorFiles.append(button);
+  }
+}
+
+// recognizes the protected original backup
+function isDataEditorOriginalBackup(name) {
+  return /^original\.[^.]+$/i.test(name ?? "");
+}
+
+// renders the backup menu for the current file
+function renderDataEditorBackups(backups = []) {
+  elements.dataEditorBackups.replaceChildren(new Option("Current file", ""));
+  for (const backup of backups) {
+    elements.dataEditorBackups.append(new Option(backup, backup));
+  }
+  elements.dataEditorBackups.value = dataEditor.viewingBackup;
+  const hasCurrent = Boolean(dataEditor.current);
+  const hasBackup = Boolean(dataEditor.viewingBackup);
+  const protectedBackup = isDataEditorOriginalBackup(dataEditor.viewingBackup);
+  elements.dataEditorBackups.disabled = !hasCurrent || backups.length === 0;
+  elements.dataEditorRestore.disabled = !hasBackup;
+  elements.dataEditorRename.disabled = !hasBackup || protectedBackup;
+  elements.dataEditorDelete.disabled = !hasBackup || protectedBackup;
+}
+
+// marks table or text edits as pending
+function markDataEditorDirty() {
+  if (!dataEditor.current || dataEditor.viewingBackup) return;
+  dataEditor.dirty = true;
+  elements.dataEditorSave.disabled = false;
+  dataEditorStatus("Unsaved changes");
+}
+
+// builds a table cell input
+function dataEditorCell(value, onInput) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value ?? "";
+  input.disabled = Boolean(dataEditor.viewingBackup);
+  input.addEventListener("input", onInput);
+  return input;
+}
+
+// reads the current editor controls
+function collectDataEditorInput() {
+  const file = dataEditor.current;
+  if (!file) return null;
+  if (file.format === "text") {
+    return {
+      kind: file.kind,
+      text: elements.dataEditorBody.querySelector("textarea")?.value ?? "",
+      headers: [],
+      rows: [],
+    };
+  }
+
+  const headers = [...elements.dataEditorBody.querySelectorAll("thead input")].map(
+    (input) => input.value,
+  );
+  const rows = [...elements.dataEditorBody.querySelectorAll("tbody tr")].map((row) =>
+    [...row.querySelectorAll("td input")].map((input) => input.value),
+  );
+  return { kind: file.kind, text: null, headers, rows };
+}
+
+// renders the current text or csv editor
+function renderDataEditorContent(content) {
+  dataEditor.content = content;
+  dataEditor.current = content.file;
+  dataEditor.dirty = false;
+  renderDataEditorFiles();
+  renderDataEditorBackups(content.backups);
+  elements.dataEditorCurrent.textContent = `${content.file.title} - ${content.file.name}`;
+  elements.dataEditorSave.disabled = Boolean(dataEditor.viewingBackup);
+  dataEditorStatus(dataEditor.viewingBackup ? `Viewing ${dataEditor.viewingBackup}` : "Ready");
+  elements.dataEditorBody.replaceChildren();
+  elements.dataEditorTableActions.classList.toggle(
+    "hidden",
+    content.file.format !== "csv" || Boolean(dataEditor.viewingBackup),
+  );
+
+  if (content.file.format === "text") {
+    const textarea = document.createElement("textarea");
+    textarea.className = "data-editor-textarea";
+    textarea.value = content.text ?? "";
+    textarea.disabled = Boolean(dataEditor.viewingBackup);
+    textarea.addEventListener("input", markDataEditorDirty);
+    elements.dataEditorBody.append(textarea);
+    return;
+  }
+
+  const headers = content.headers.length ? content.headers : ["Column 1"];
+  const rows = content.rows ?? [];
+  const wrapper = document.createElement("div");
+  wrapper.className = "data-editor-table-wrap";
+  const table = document.createElement("table");
+  table.className = "data-editor-table";
+  const thead = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  const corner = document.createElement("th");
+  corner.className = "row-number";
+  corner.textContent = "#";
+  headerRow.append(corner);
+  for (const header of headers) {
+    const th = document.createElement("th");
+    th.append(dataEditorCell(header, markDataEditorDirty));
+    headerRow.append(th);
+  }
+  thead.append(headerRow);
+
+  const tbody = document.createElement("tbody");
+  rows.forEach((row, rowIndex) => {
+    const tr = document.createElement("tr");
+    const rowNumber = document.createElement("th");
+    rowNumber.className = "row-number";
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "delete-row";
+    deleteButton.type = "button";
+    deleteButton.textContent = String(rowIndex + 1);
+    deleteButton.title = "delete row";
+    deleteButton.disabled = Boolean(dataEditor.viewingBackup);
+    deleteButton.addEventListener("click", () => {
+      tr.remove();
+      [...tbody.querySelectorAll(".delete-row")].forEach((button, index) => {
+        button.textContent = String(index + 1);
+      });
+      markDataEditorDirty();
+    });
+    rowNumber.append(deleteButton);
+    tr.append(rowNumber);
+    for (let column = 0; column < headers.length; column += 1) {
+      const td = document.createElement("td");
+      td.append(dataEditorCell(row[column] ?? "", markDataEditorDirty));
+      tr.append(td);
+    }
+    tbody.append(tr);
+  });
+
+  table.append(thead, tbody);
+  wrapper.append(table);
+  elements.dataEditorBody.append(wrapper);
+}
+
+// opens the editor modal and loads file metadata
+async function openDataEditor() {
+  if (!project) {
+    showToast("Select a dataset folder first.", "error");
+    return;
+  }
+  elements.dataEditorModal.classList.remove("hidden");
+  elements.editDataButton.classList.add("active");
+  dataEditorStatus("Loading files...");
+  if (!isDesktop) {
+    showToast("The data editor is available in the desktop app.");
+    return;
+  }
+  try {
+    dataEditor.files = await invoke("data_editor_files", { projectPath: project.path });
+    renderDataEditorFiles();
+    const first = dataEditor.files[0];
+    if (first) {
+      await openDataEditorFile(dataEditor.current?.kind ?? first.kind);
+    } else {
+      dataEditorStatus("No editable files found");
+    }
+  } catch (error) {
+    dataEditorStatus("Failed to load files");
+    showToast(String(error), "error");
+  }
+}
+
+// closes the editor modal
+function closeDataEditor() {
+  elements.dataEditorModal.classList.add("hidden");
+  elements.editDataButton.classList.remove("active");
+}
+
+// loads one editable live file
+async function openDataEditorFile(kind) {
+  if (!project || !isDesktop) return;
+  try {
+    dataEditor.viewingBackup = "";
+    dataEditorStatus("Loading file...");
+    const content = await invoke("data_editor_read", {
+      projectPath: project.path,
+      kind,
+    });
+    renderDataEditorContent(content);
+  } catch (error) {
+    dataEditorStatus("Failed to load file");
+    showToast(String(error), "error");
+  }
+}
+
+// previews a saved backup
+async function openDataEditorBackup(name) {
+  if (!project || !dataEditor.current || !isDesktop) return;
+  if (!name) {
+    await openDataEditorFile(dataEditor.current.kind);
+    return;
+  }
+  try {
+    dataEditor.viewingBackup = name;
+    dataEditorStatus("Loading backup...");
+    const content = await invoke("data_editor_read_backup", {
+      projectPath: project.path,
+      kind: dataEditor.current.kind,
+      backup: name,
+    });
+    renderDataEditorContent(content);
+  } catch (error) {
+    dataEditorStatus("Failed to load backup");
+    showToast(String(error), "error");
+  }
+}
+
+// saves the current live file
+async function saveDataEditorFile() {
+  const input = collectDataEditorInput();
+  if (!project || !input || dataEditor.viewingBackup || !isDesktop) return;
+  try {
+    dataEditorStatus("Saving...");
+    const content = await invoke("data_editor_save", {
+      projectPath: project.path,
+      input,
+    });
+    dataEditor.viewingBackup = "";
+    renderDataEditorContent(content);
+    await refreshProject();
+    resetVisualizer();
+    addActivity(`Saved ${content.file.title}.`, "success");
+    showToast(`${content.file.title} saved.`);
+  } catch (error) {
+    dataEditorStatus("Save failed");
+    showToast(String(error), "error");
+  }
+}
+
+// reloads the selected file from disk
+async function refreshDataEditorFile() {
+  if (!dataEditor.current) return;
+  if (dataEditor.viewingBackup) {
+    await openDataEditorBackup(dataEditor.viewingBackup);
+  } else {
+    await openDataEditorFile(dataEditor.current.kind);
+  }
+}
+
+// restores the selected backup into the live file
+async function restoreDataEditorBackup() {
+  if (!project || !dataEditor.current || !dataEditor.viewingBackup || !isDesktop) return;
+  try {
+    const backupName = dataEditor.viewingBackup;
+    dataEditorStatus("Restoring backup...");
+    const content = await invoke("data_editor_restore_backup", {
+      projectPath: project.path,
+      kind: dataEditor.current.kind,
+      backup: backupName,
+    });
+    dataEditor.viewingBackup = "";
+    renderDataEditorContent(content);
+    await refreshProject();
+    resetVisualizer();
+    addActivity(`Restored ${backupName}.`, "success");
+    showToast("Backup restored.");
+  } catch (error) {
+    dataEditorStatus("Restore failed");
+    showToast(String(error), "error");
+  }
+}
+
+// renames a selected backup
+async function renameDataEditorBackup() {
+  if (!project || !dataEditor.current || !dataEditor.viewingBackup || !isDesktop) return;
+  if (isDataEditorOriginalBackup(dataEditor.viewingBackup)) return;
+  const nextName = await appPrompt(
+    "Rename this data file backup.",
+    dataEditor.viewingBackup,
+    "Rename data backup",
+  );
+  if (!nextName || nextName === dataEditor.viewingBackup) return;
+  try {
+    const newName = await invoke("data_editor_rename_backup", {
+      projectPath: project.path,
+      kind: dataEditor.current.kind,
+      backup: dataEditor.viewingBackup,
+      name: nextName,
+    });
+    dataEditor.viewingBackup = newName;
+    await openDataEditorBackup(newName);
+    showToast("Backup renamed.");
+  } catch (error) {
+    showToast(String(error), "error");
+  }
+}
+
+// deletes a selected backup
+async function deleteDataEditorBackup() {
+  if (!project || !dataEditor.current || !dataEditor.viewingBackup || !isDesktop) return;
+  if (isDataEditorOriginalBackup(dataEditor.viewingBackup)) return;
+  try {
+    const kind = dataEditor.current.kind;
+    const deleted = dataEditor.viewingBackup;
+    await invoke("data_editor_delete_backup", {
+      projectPath: project.path,
+      kind,
+      backup: deleted,
+    });
+    dataEditor.viewingBackup = "";
+    await openDataEditorFile(kind);
+    showToast("Backup deleted.");
+  } catch (error) {
+    showToast(String(error), "error");
+  }
+}
+
+// adds an empty csv row
+function addDataEditorRow() {
+  if (!dataEditor.current || dataEditor.current.format !== "csv" || dataEditor.viewingBackup) {
+    return;
+  }
+  const input = collectDataEditorInput();
+  dataEditor.content.headers = input.headers;
+  dataEditor.content.rows = [...input.rows, input.headers.map(() => "")];
+  renderDataEditorContent(dataEditor.content);
+  markDataEditorDirty();
+}
+
+// adds an empty csv column
+function addDataEditorColumn() {
+  if (!dataEditor.current || dataEditor.current.format !== "csv" || dataEditor.viewingBackup) {
+    return;
+  }
+  const input = collectDataEditorInput();
+  const headers = [...input.headers, `Column ${input.headers.length + 1}`];
+  const rows = input.rows.map((row) => [...row, ""]);
+  dataEditor.content.headers = headers;
+  dataEditor.content.rows = rows;
+  renderDataEditorContent(dataEditor.content);
+  markDataEditorDirty();
 }
 
 // switches to the run tab
@@ -2547,6 +2934,19 @@ async function bootstrap() {
     button.addEventListener("click", chooseProject);
   }
   elements.runButton.addEventListener("click", runAll);
+  elements.goVisualizerButton.addEventListener("click", showVisualizerView);
+  elements.editDataButton.addEventListener("click", openDataEditor);
+  elements.dataEditorClose.addEventListener("click", closeDataEditor);
+  elements.dataEditorSave.addEventListener("click", saveDataEditorFile);
+  elements.dataEditorRefresh.addEventListener("click", refreshDataEditorFile);
+  elements.dataEditorRestore.addEventListener("click", restoreDataEditorBackup);
+  elements.dataEditorRename.addEventListener("click", renameDataEditorBackup);
+  elements.dataEditorDelete.addEventListener("click", deleteDataEditorBackup);
+  elements.dataEditorAddRow.addEventListener("click", addDataEditorRow);
+  elements.dataEditorAddColumn.addEventListener("click", addDataEditorColumn);
+  elements.dataEditorBackups.addEventListener("change", () =>
+    openDataEditorBackup(elements.dataEditorBackups.value),
+  );
   elements.runTab.addEventListener("click", showRunView);
   elements.visualizerTab.addEventListener("click", showVisualizerView);
   elements.visualizerTransition.addEventListener("change", () => {

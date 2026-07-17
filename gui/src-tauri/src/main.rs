@@ -7,6 +7,7 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 struct RunState(AtomicBool);
@@ -30,9 +31,37 @@ struct Settings {
 #[serde(rename_all = "camelCase")]
 struct ProjectOutputs {
     acq_time: bool,
-    long_csv: bool,
+    results_csv: bool,
     misc_data: bool,
     pdf_plots: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataEditorFile {
+    kind: String,
+    title: String,
+    name: String,
+    format: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataEditorContent {
+    file: DataEditorFile,
+    text: Option<String>,
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+    backups: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DataEditorSaveInput {
+    kind: String,
+    text: Option<String>,
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -803,7 +832,7 @@ fn save_bounds_to_batch(project: &Path, edits: &[BoundEdit]) -> Result<usize, St
     Ok(written)
 }
 
-// writes long.csv with sample ids inserted as column d
+// writes rfkit_results.csv from the worker long.csv output
 fn write_labeled_results(project: &Path) -> Result<(), String> {
     let source = project.join("long.csv");
     if !source.is_file() {
@@ -870,6 +899,309 @@ fn write_labeled_results(project: &Path) -> Result<(), String> {
         .join("\n");
     output.push('\n');
     fs::write(project.join("RFkit_results.csv"), output).map_err(|error| error.to_string())
+}
+
+// removes long.csv when the gui only needed it as a temporary worker output
+fn cleanup_generated_long_csv(project: &Path, existed_before: bool) -> Result<(), String> {
+    if existed_before || !project.join("RFkit_results.csv").is_file() {
+        return Ok(());
+    }
+    match fs::remove_file(project.join("long.csv")) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+// uses the labeled result table once it exists
+fn preferred_results_file(project: &Path) -> PathBuf {
+    let labeled = project.join("RFkit_results.csv");
+    if labeled.is_file() {
+        labeled
+    } else {
+        project.join("long.csv")
+    }
+}
+
+// returns a compact timestamp for editor backup names
+fn timestamp_token() -> Result<u64, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|error| error.to_string())
+}
+
+// reads param.txt without making it required for editor detection
+fn project_parameters(project: &Path) -> Option<toml::Table> {
+    fs::read_to_string(project.join("param.txt"))
+        .ok()?
+        .parse::<toml::Table>()
+        .ok()
+}
+
+// finds a root-level csv containing all requested words
+fn find_named_csv(project: &Path, words: &[&str]) -> Option<PathBuf> {
+    let mut candidates = fs::read_dir(project)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.to_ascii_lowercase())
+                    .is_some_and(|name| {
+                        name.ends_with(".csv") && words.iter().all(|word| name.contains(word))
+                    })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable();
+    candidates.into_iter().next()
+}
+
+// resolves the parent daughter transition table from param.txt or the folder
+fn parent_daughter_table(project: &Path) -> PathBuf {
+    project_parameters(project)
+        .and_then(|parameters| {
+            parameters
+                .get("transition_list")
+                .and_then(toml::Value::as_str)
+                .map(|value| project_file(project, value))
+        })
+        .or_else(|| find_named_csv(project, &["parent", "daughter"]))
+        .unwrap_or_else(|| project.join("Parent daughter table (WK).csv"))
+}
+
+// returns editor file metadata for rfkit inputs
+fn data_editor_files_for_project(project: &Path) -> Vec<DataEditorFile> {
+    let sample_list =
+        find_sample_list(project).unwrap_or_else(|| project.join("GUI test sample list.csv"));
+    let transition = parent_daughter_table(project);
+    [
+        ("param", "param.txt", project.join("param.txt"), "text"),
+        ("sampleList", "Sample list", sample_list, "csv"),
+        ("transition", "Parent daughter table", transition, "csv"),
+    ]
+    .into_iter()
+    .map(|(kind, title, path, format)| DataEditorFile {
+        kind: kind.to_string(),
+        title: title.to_string(),
+        name: display_name(project, &path),
+        format: format.to_string(),
+    })
+    .collect()
+}
+
+// resolves a single editor file by kind
+fn data_editor_file(project: &Path, kind: &str) -> Result<DataEditorFile, String> {
+    data_editor_files_for_project(project)
+        .into_iter()
+        .find(|file| file.kind == kind)
+        .ok_or_else(|| "that editable file is not available".to_string())
+}
+
+// resolves the absolute path for a single editor file
+fn data_editor_path(project: &Path, kind: &str) -> Result<PathBuf, String> {
+    match kind {
+        "param" => Ok(project.join("param.txt")),
+        "sampleList" => {
+            Ok(find_sample_list(project)
+                .unwrap_or_else(|| project.join("GUI test sample list.csv")))
+        }
+        "transition" => Ok(parent_daughter_table(project)),
+        _ => Err("that editable file is not available".to_string()),
+    }
+}
+
+// returns the backup folder for an editable file
+fn data_editor_backup_dir(project: &Path, kind: &str) -> Result<PathBuf, String> {
+    data_editor_file(project, kind)?;
+    Ok(project.join("data_file_backups").join(kind))
+}
+
+// names the protected original backup
+fn data_editor_original_backup_name(project: &Path, kind: &str) -> Result<String, String> {
+    let path = data_editor_path(project, kind)?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("txt");
+    Ok(format!("original.{extension}"))
+}
+
+// creates the protected original backup once
+fn ensure_data_editor_original_backup(
+    project: &Path,
+    kind: &str,
+) -> Result<Option<String>, String> {
+    let path = data_editor_path(project, kind)?;
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let name = data_editor_original_backup_name(project, kind)?;
+    let directory = data_editor_backup_dir(project, kind)?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let target = directory.join(&name);
+    if !target.is_file() {
+        fs::copy(path, target).map_err(|error| error.to_string())?;
+    }
+    Ok(Some(name))
+}
+
+// lists saved editor backups with original first
+fn list_data_editor_backups(project: &Path, kind: &str) -> Result<Vec<String>, String> {
+    let original = ensure_data_editor_original_backup(project, kind)?;
+    let directory = data_editor_backup_dir(project, kind)?;
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut backups = fs::read_dir(directory)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    backups.sort_unstable();
+    if let Some(original) = original
+        && let Some(index) = backups.iter().position(|name| name == &original)
+    {
+        let original = backups.remove(index);
+        backups.insert(0, original);
+    }
+    Ok(backups)
+}
+
+// reads a csv table into headers and rows
+fn read_csv_table(
+    path: &Path,
+    fallback_headers: &[&str],
+) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    if !path.is_file() {
+        return Ok((
+            fallback_headers
+                .iter()
+                .map(|header| header.to_string())
+                .collect(),
+            Vec::new(),
+        ));
+    }
+    let contents = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut lines = contents.lines();
+    let headers = lines.next().map(parse_csv_line).unwrap_or_else(|| {
+        fallback_headers
+            .iter()
+            .map(|header| header.to_string())
+            .collect()
+    });
+    let rows = lines
+        .filter(|line| !line.trim().is_empty())
+        .map(parse_csv_line)
+        .collect();
+    Ok((headers, rows))
+}
+
+// writes a csv table from editor rows
+fn write_csv_table(path: &Path, headers: &[String], rows: &[Vec<String>]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut output = Vec::new();
+    output.push(
+        headers
+            .iter()
+            .map(|cell| csv_cell(cell))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    for row in rows {
+        output.push(
+            row.iter()
+                .map(|cell| csv_cell(cell))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    let mut contents = output.join("\n");
+    contents.push('\n');
+    fs::write(path, contents).map_err(|error| error.to_string())
+}
+
+// reads current or backup editor content
+fn read_data_editor_content_from_path(
+    project: &Path,
+    kind: &str,
+    path: &Path,
+) -> Result<DataEditorContent, String> {
+    let file = data_editor_file(project, kind)?;
+    let backups = list_data_editor_backups(project, kind)?;
+    if file.format == "text" {
+        return Ok(DataEditorContent {
+            file,
+            text: Some(fs::read_to_string(path).unwrap_or_default()),
+            headers: Vec::new(),
+            rows: Vec::new(),
+            backups,
+        });
+    }
+    let fallback = match kind {
+        "sampleList" => vec!["Plate", "Well", "Sample_ID"],
+        "transition" => vec!["Transition", "Parent", "Daughter"],
+        _ => Vec::new(),
+    };
+    let (headers, rows) = read_csv_table(path, &fallback)?;
+    Ok(DataEditorContent {
+        file,
+        text: None,
+        headers,
+        rows,
+        backups,
+    })
+}
+
+// validates editor backup file names
+fn safe_data_editor_backup_name(name: &str, old_name: &str) -> Result<String, String> {
+    let mut name = name.trim().to_string();
+    if name.is_empty()
+        || name.len() > 120
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name
+            .chars()
+            .any(|character| matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+        || name.chars().any(|character| character.is_control())
+    {
+        return Err("the backup name is invalid".to_string());
+    }
+    if Path::new(&name).extension().is_none()
+        && let Some(extension) = Path::new(old_name)
+            .extension()
+            .and_then(|value| value.to_str())
+    {
+        name.push('.');
+        name.push_str(extension);
+    }
+    Ok(name)
+}
+
+// backs up the current editable file before save or restore
+fn backup_data_editor_file(
+    project: &Path,
+    kind: &str,
+    path: &Path,
+) -> Result<Option<String>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let directory = data_editor_backup_dir(project, kind)?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("txt");
+    let name = format!("{}_{}.{}", kind, timestamp_token()?, extension);
+    fs::copy(path, directory.join(&name)).map_err(|error| error.to_string())?;
+    Ok(Some(name))
 }
 
 // counts mzml inputs recursively
@@ -1189,7 +1521,7 @@ fn inspect_project(project: &Path) -> ProjectSummary {
 
     let outputs = ProjectOutputs {
         acq_time: project.join("acq_time.csv").is_file(),
-        long_csv: project.join("long.csv").is_file(),
+        results_csv: preferred_results_file(project).is_file(),
         misc_data: project.join("misc").is_dir(),
         pdf_plots: has_matching_file(project, "plot_", ".pdf"),
     };
@@ -1370,6 +1702,126 @@ fn visualizer_list_bounds_backups(
         last,
         labels,
     })
+}
+
+#[tauri::command]
+// returns editable rfkit input files
+fn data_editor_files(project_path: String) -> Result<Vec<DataEditorFile>, String> {
+    Ok(data_editor_files_for_project(&PathBuf::from(project_path)))
+}
+
+#[tauri::command]
+// reads one editable input file
+fn data_editor_read(project_path: String, kind: String) -> Result<DataEditorContent, String> {
+    let project = PathBuf::from(project_path);
+    let path = data_editor_path(&project, &kind)?;
+    read_data_editor_content_from_path(&project, &kind, &path)
+}
+
+#[tauri::command]
+// previews one editable input backup
+fn data_editor_read_backup(
+    project_path: String,
+    kind: String,
+    backup: String,
+) -> Result<DataEditorContent, String> {
+    let project = PathBuf::from(project_path);
+    let backups = list_data_editor_backups(&project, &kind)?;
+    if !backups.contains(&backup) {
+        return Err("that backup was not found".to_string());
+    }
+    let path = data_editor_backup_dir(&project, &kind)?.join(backup);
+    read_data_editor_content_from_path(&project, &kind, &path)
+}
+
+#[tauri::command]
+// saves one editable input file
+fn data_editor_save(
+    project_path: String,
+    input: DataEditorSaveInput,
+) -> Result<DataEditorContent, String> {
+    let project = PathBuf::from(project_path);
+    let path = data_editor_path(&project, &input.kind)?;
+    let _ = ensure_data_editor_original_backup(&project, &input.kind)?;
+    let _ = backup_data_editor_file(&project, &input.kind, &path)?;
+    if let Some(text) = input.text {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        fs::write(&path, text).map_err(|error| error.to_string())?;
+    } else {
+        write_csv_table(&path, &input.headers, &input.rows)?;
+    }
+    read_data_editor_content_from_path(&project, &input.kind, &path)
+}
+
+#[tauri::command]
+// restores an editable input backup over the live file
+fn data_editor_restore_backup(
+    project_path: String,
+    kind: String,
+    backup: String,
+) -> Result<DataEditorContent, String> {
+    let project = PathBuf::from(project_path);
+    let backups = list_data_editor_backups(&project, &kind)?;
+    if !backups.contains(&backup) {
+        return Err("that backup was not found".to_string());
+    }
+    let live = data_editor_path(&project, &kind)?;
+    let source = data_editor_backup_dir(&project, &kind)?.join(backup);
+    let _ = backup_data_editor_file(&project, &kind, &live)?;
+    if let Some(parent) = live.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::copy(source, &live).map_err(|error| error.to_string())?;
+    read_data_editor_content_from_path(&project, &kind, &live)
+}
+
+#[tauri::command]
+// renames an editable input backup
+fn data_editor_rename_backup(
+    project_path: String,
+    kind: String,
+    backup: String,
+    name: String,
+) -> Result<String, String> {
+    let project = PathBuf::from(project_path);
+    if backup == data_editor_original_backup_name(&project, &kind)? {
+        return Err("original cannot be renamed".to_string());
+    }
+    let backups = list_data_editor_backups(&project, &kind)?;
+    if !backups.contains(&backup) {
+        return Err("that backup was not found".to_string());
+    }
+    let renamed = safe_data_editor_backup_name(&name, &backup)?;
+    let directory = data_editor_backup_dir(&project, &kind)?;
+    let target = directory.join(&renamed);
+    if target.exists() {
+        return Err("a backup with that name already exists".to_string());
+    }
+    fs::rename(directory.join(backup), target).map_err(|error| error.to_string())?;
+    Ok(renamed)
+}
+
+#[tauri::command]
+// deletes an editable input backup
+fn data_editor_delete_backup(
+    project_path: String,
+    kind: String,
+    backup: String,
+) -> Result<DataEditorContent, String> {
+    let project = PathBuf::from(project_path);
+    if backup == data_editor_original_backup_name(&project, &kind)? {
+        return Err("original cannot be deleted".to_string());
+    }
+    let backups = list_data_editor_backups(&project, &kind)?;
+    if !backups.contains(&backup) {
+        return Err("that backup was not found".to_string());
+    }
+    fs::remove_file(data_editor_backup_dir(&project, &kind)?.join(backup))
+        .map_err(|error| error.to_string())?;
+    let live = data_editor_path(&project, &kind)?;
+    read_data_editor_content_from_path(&project, &kind, &live)
 }
 
 #[tauri::command]
@@ -1728,6 +2180,7 @@ fn run_worker(app: AppHandle, project: PathBuf) -> Result<ProjectSummary, String
     }
     let worker = find_worker(&project)
         .ok_or_else(|| "the RFkit processing engine was not found".to_string())?;
+    let had_long_csv = project.join("long.csv").is_file();
 
     run_worker_command(&app, &project, &worker, "1", "acquisition time generation")?;
     run_worker_command(
@@ -1738,6 +2191,7 @@ fn run_worker(app: AppHandle, project: PathBuf) -> Result<ProjectSummary, String
         "area calculation and gui plot data",
     )?;
     write_labeled_results(&project)?;
+    cleanup_generated_long_csv(&project, had_long_csv)?;
     Ok(inspect_project(&project))
 }
 
@@ -1785,6 +2239,13 @@ fn main() {
             visualizer_list_transitions,
             visualizer_transition,
             visualizer_list_bounds_backups,
+            data_editor_files,
+            data_editor_read,
+            data_editor_read_backup,
+            data_editor_save,
+            data_editor_restore_backup,
+            data_editor_rename_backup,
+            data_editor_delete_backup,
             visualizer_rename_bounds_backup,
             visualizer_delete_bounds_backup,
             visualizer_restore_bounds_backup,
@@ -1893,6 +2354,31 @@ mod tests {
             result,
             "sample,ID,well,Sample_ID,RT at apex,area,height\nsequence1.mzML,Cer,\"(1, 1)\",SN0323,0.223,13935.9,3070.1\n"
         );
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn cleanup_generated_long_csv_only_removes_new_worker_output() {
+        let project = std::env::temp_dir().join(format!(
+            "rfkit_long_cleanup_{}_{}",
+            std::process::id(),
+            "test"
+        ));
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("long.csv"), "sample,ID,well\n").unwrap();
+        fs::write(
+            project.join("RFkit_results.csv"),
+            "sample,ID,well,Sample_ID\n",
+        )
+        .unwrap();
+
+        cleanup_generated_long_csv(&project, false).unwrap();
+        assert!(!project.join("long.csv").exists());
+
+        fs::write(project.join("long.csv"), "sample,ID,well\n").unwrap();
+        cleanup_generated_long_csv(&project, true).unwrap();
+        assert!(project.join("long.csv").exists());
+
         fs::remove_dir_all(project).unwrap();
     }
 

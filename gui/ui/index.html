@@ -44,6 +44,9 @@
           <button class="nav-item" id="visualizer-tab" type="button">
             Visualizer
           </button>
+          <button class="nav-item" id="edit-data-tab" type="button">
+            Edit data
+          </button>
         </nav>
 
         <div class="header-actions">
@@ -127,7 +130,7 @@
           <div>
             <span class="eyebrow">one step</span>
             <h2 id="run-title">Process dataset</h2>
-            <p id="run-subtitle">Generates acq_time.csv, long.csv, and GUI plot data.</p>
+            <p id="run-subtitle">Generates acq_time.csv, RFkit_results.csv, and GUI plot data.</p>
           </div>
           <button class="run-button" id="run-all" type="button" disabled>
             <span class="run-ready">Run RFkit</span>
@@ -140,14 +143,25 @@
             <span>acq_time.csv</span>
             <strong>waiting</strong>
           </article>
-          <article class="output" id="output-long">
-            <span>long.csv</span>
+          <article class="output" id="output-results">
+            <span>results csv</span>
             <strong>waiting</strong>
           </article>
           <article class="output" id="output-misc">
             <span>misc plot data</span>
             <strong>waiting</strong>
           </article>
+        </section>
+
+        <section class="run-shortcuts" aria-label="next step">
+          <button class="secondary-button go-visualizer-button" id="go-visualizer" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 19V5" />
+              <path d="M4 19h16" />
+              <path d="m7 15 3-4 3 2 4-6" />
+            </svg>
+            <span>Go to visualizer</span>
+          </button>
         </section>
 
         <section class="activity-panel" aria-labelledby="activity-title">
@@ -399,6 +413,49 @@
           <button id="prompt-cancel" class="secondary-button" type="button">Cancel</button>
           <button id="prompt-ok" class="primary-button" type="button">Save</button>
         </div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop hidden" id="data-editor-modal" role="presentation">
+      <section
+        class="data-editor-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="data-editor-title"
+      >
+        <aside class="data-editor-sidebar" aria-label="editable dataset files">
+          <div>
+            <span class="eyebrow">dataset editor</span>
+            <h2 id="data-editor-title">Edit data</h2>
+          </div>
+          <div class="data-editor-files" id="data-editor-files"></div>
+        </aside>
+        <section class="data-editor-main">
+          <div class="data-editor-toolbar">
+            <div>
+              <strong id="data-editor-current">Select a file</strong>
+              <span id="data-editor-status">Ready</span>
+            </div>
+            <div class="data-editor-actions">
+              <select id="data-editor-backups" title="restore a saved file backup">
+                <option value="">No backups yet</option>
+              </select>
+              <button id="data-editor-restore" type="button">Restore</button>
+              <button id="data-editor-rename" type="button">Rename</button>
+              <button id="data-editor-delete" type="button">Delete</button>
+              <button id="data-editor-refresh" type="button">Refresh</button>
+              <button id="data-editor-save" type="button">Save</button>
+              <button id="data-editor-close" type="button">Close</button>
+            </div>
+          </div>
+          <div class="data-editor-table-actions hidden" id="data-editor-table-actions">
+            <button id="data-editor-add-row" type="button">Add row</button>
+            <button id="data-editor-add-column" type="button">Add column</button>
+          </div>
+          <div class="data-editor-body" id="data-editor-body">
+            <p class="empty-log">Select a file on the left to begin editing.</p>
+          </div>
+        </section>
       </section>
     </div>
 

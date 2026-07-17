@@ -67,7 +67,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -363,6 +365,16 @@ main {
 .outputs-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   justify-content: center;
+}
+
+.run-shortcuts {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.go-visualizer-button {
+  width: min(240px, 100%);
 }
 
 .fact,
@@ -975,9 +987,14 @@ footer a:hover {
   inset: 0;
   display: grid;
   padding: 24px;
+  overflow: auto;
   background: rgba(36, 49, 58, 0.48);
   backdrop-filter: blur(8px);
   place-items: center;
+}
+
+#prompt-modal {
+  z-index: 80;
 }
 
 .project-modal {
@@ -1035,6 +1052,280 @@ footer a:hover {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-top: 16px;
+}
+
+.data-editor-modal {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  width: min(1180px, 100%);
+  height: min(760px, 100%);
+  max-height: calc(100dvh - 48px);
+  min-height: 0;
+  margin: auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 28px 70px rgba(36, 49, 58, 0.24);
+}
+
+.data-editor-sidebar {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 15px;
+  min-width: 0;
+  padding: 18px;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--canvas) 72%, var(--surface));
+}
+
+.data-editor-sidebar h2 {
+  margin: 0;
+  font-size: 21px;
+}
+
+.data-editor-files {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.data-editor-file {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 11px 12px;
+  text-align: left;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.data-editor-file:hover,
+.data-editor-file.active {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.data-editor-file strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-editor-file span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-editor-main {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.data-editor-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.data-editor-toolbar > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.data-editor-toolbar strong,
+.data-editor-toolbar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-editor-toolbar strong {
+  font-size: 13px;
+}
+
+.data-editor-toolbar span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.data-editor-actions,
+.data-editor-table-actions {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.data-editor-actions button,
+.data-editor-table-actions button,
+.data-editor-actions select {
+  height: 34px;
+  padding: 0 10px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.data-editor-actions button:not(:disabled),
+.data-editor-table-actions button:not(:disabled),
+.data-editor-actions select:not(:disabled) {
+  cursor: pointer;
+}
+
+.data-editor-actions button:not(:disabled):hover,
+.data-editor-table-actions button:not(:disabled):hover {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.data-editor-actions select {
+  max-width: 190px;
+}
+
+.data-editor-table-actions {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--canvas) 58%, var(--surface));
+}
+
+.data-editor-body {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  overflow: hidden;
+}
+
+.data-editor-textarea {
+  display: block;
+  align-self: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: clamp(360px, calc(100dvh - 230px), 620px);
+  resize: none;
+  padding: 13px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.data-editor-table-wrap {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.data-editor-table {
+  width: max-content;
+  min-width: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  font-size: 11px;
+}
+
+.data-editor-table th,
+.data-editor-table td {
+  width: 154px;
+  min-width: 154px;
+  max-width: 154px;
+  padding: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.data-editor-table th:first-child,
+.data-editor-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.data-editor-table th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background: color-mix(in srgb, var(--blue-soft) 70%, var(--surface));
+}
+
+.data-editor-table th:first-child {
+  z-index: 3;
+}
+
+.data-editor-table input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  color: var(--ink);
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+}
+
+.data-editor-table th input {
+  color: var(--blue);
+  font-weight: 850;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.data-editor-table .row-number {
+  min-width: 52px;
+  width: 52px;
+  max-width: 52px;
+  color: var(--muted);
+  font-weight: 800;
+  text-align: center;
+  background: color-mix(in srgb, var(--canvas) 78%, var(--surface));
+}
+
+.data-editor-table .delete-row {
+  width: 100%;
+  height: 32px;
+  padding: 0;
+  color: var(--muted);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.data-editor-table .delete-row:hover {
+  color: var(--red);
 }
 
 .primary-button {
@@ -1125,6 +1416,26 @@ footer a:hover {
   .run-button,
   .project-panel .secondary-button {
     width: 100%;
+  }
+
+  .data-editor-modal {
+    grid-template-columns: 1fr;
+    height: 100%;
+  }
+
+  .data-editor-sidebar {
+    max-height: 190px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .data-editor-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .data-editor-actions {
+    justify-content: flex-start;
   }
 }
 
